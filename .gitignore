@@ -4,7 +4,6 @@ __pycache__/
 *.pyc
 .pytest_cache/
 node_modules/
-frontend/dist/
 
 # Secrets: never commit. Only the example file is tracked.
 .env

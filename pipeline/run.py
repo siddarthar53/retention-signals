@@ -99,7 +99,7 @@ def seed_users(conn, run_id: str) -> list[tuple[str, str, str]]:
     people = [("hr1", "HR Partner 01", "hr_partner", None), ("hr2", "HR Partner 02", "hr_partner", None),
               ("itops1", "IT Operations 01", "it_ops", None), ("admin1", "Administrator 01", "admin", None)]
     for i, (team_id, emp, _) in enumerate(teams, 1):
-        people.append((f"manager{i}", f"Manager · {team_id}", "manager", emp))
+        people.append((f"manager{i}", f"Manager of {team_id}", "manager", emp))
     creds = []
     for i, (username, name, role, emp) in enumerate(people, 1):
         uid = f"USR-{i:04d}"
