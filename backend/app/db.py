@@ -29,6 +29,11 @@ def now() -> dt.datetime:
     return (base + dt.timedelta(seconds=time.monotonic() - _START)).replace(microsecond=0)
 
 
+def real_now() -> dt.datetime:
+    """Wall-clock UTC, for session creation and expiry (never the simulated business clock)."""
+    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+
+
 def _configure(conn: psycopg.Connection) -> None:
     conn.execute("SET TIME ZONE 'UTC'")
     conn.execute("SET statement_timeout = '15s'")

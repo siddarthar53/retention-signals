@@ -56,6 +56,10 @@ def create_app(cfg: settings.Settings | None = None, *, manage_pool: bool = True
     app = FastAPI(title="Retention Signals API", version="0.5", lifespan=lifespan,
                   docs_url="/api/docs", openapi_url="/api/openapi.json")
 
+    @app.exception_handler(gate.NoActiveRun)
+    async def no_run(_, __):
+        return JSONResponse({"detail": "No scoring run yet. Run python -m pipeline.run first."}, status_code=503)
+
     @app.middleware("http")
     async def guard(request: Request, call_next):
         if request.url.path.startswith("/api/"):
@@ -72,7 +76,8 @@ def create_app(cfg: settings.Settings | None = None, *, manage_pool: bool = True
         return response
 
     def current_user(request: Request, conn=Depends(db.get_conn)) -> None:
-        request.state.user = security.session_user(conn, request.cookies.get(COOKIE), db.now())
+        # Sessions expire on the real clock; db.now() is the simulated business clock for workforce data.
+        request.state.user = security.session_user(conn, request.cookies.get(COOKIE), db.real_now())
 
     api_deps = [Depends(current_user)]
 
@@ -91,7 +96,7 @@ def create_app(cfg: settings.Settings | None = None, *, manage_pool: bool = True
             security.record_failure(uname)
             raise HTTPException(401, "Username or password is incorrect.")
         with conn.transaction():
-            token = security.create_session(conn, user, db.now(), cfg.session_hours)
+            token = security.create_session(conn, user, db.real_now(), cfg.session_hours)
         response.set_cookie(COOKIE, token, httponly=True, samesite="lax", secure=cfg.secure_cookies,
                             max_age=cfg.session_hours * 3600, path="/")
         return {"user": user.__dict__}
@@ -102,7 +107,7 @@ def create_app(cfg: settings.Settings | None = None, *, manage_pool: bool = True
         if token:
             with conn.transaction():
                 conn.execute("UPDATE app.user_session SET revoked_at = %s WHERE session_id = %s AND revoked_at IS NULL",
-                             (db.now(), security.token_hash(token)))
+                             (db.real_now(), security.token_hash(token)))
         response.delete_cookie(COOKIE, path="/")
         return {"ok": True}
 
@@ -216,12 +221,16 @@ def create_app(cfg: settings.Settings | None = None, *, manage_pool: bool = True
     if dist.exists():
         app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
 
+        # Only files that sit directly in dist/ at startup can be served by name. Nothing derived from the
+        # request is ever joined onto a filesystem path (an encoded "..\\" is a parent path on Windows).
+        root_files = {p.name: p for p in dist.iterdir() if p.is_file()}
+        index = dist / "index.html"
+
         @app.get("/{path:path}", include_in_schema=False)
         def spa(path: str):
             if path.startswith("api/"):
                 raise HTTPException(404)
-            f = dist / path
-            return FileResponse(f if path and f.is_file() else dist / "index.html")
+            return FileResponse(root_files.get(path, index))
 
     return app
 
