@@ -117,9 +117,10 @@ INTERVENTION_FOR = {"engagement_latest": "checkin", "engagement_decline": "check
                     "tenure_months": "career_conversation", "new_joiner": "checkin", "recent_transfer": "checkin"}
 
 
-def simulate_interventions(conn, run_id: str) -> dict:
+def simulate_interventions(conn, run_id: str, held_out: frozenset[str] = frozenset()) -> dict:
     """Simulated HR review of every suggested check-in, then a seeded 80/20 arm assignment for approved
-    cases. Controls are recorded but never treated. Outcomes come from eval.potential_outcome."""
+    cases. Controls are recorded but never treated. Outcomes come from eval.potential_outcome.
+    Employees in the API replay fixture (held_out) are left unreviewed so the replay starts from a known state."""
     rng = np.random.default_rng(ARM_SEED)
     cases = conn.execute("""SELECT score_id, employee_id, contributions FROM app.score
                             WHERE score_run_id = %s AND priority_band = 'suggested_checkin'
@@ -127,7 +128,11 @@ def simulate_interventions(conn, run_id: str) -> dict:
     hr = [r[0] for r in conn.execute("SELECT user_id FROM app.app_user WHERE app_role='hr_partner' ORDER BY 1")]
     rev_rows, int_rows, ev_rows, arms = [], [], [], {}
     pending = 0
+    held = 0
     for i, (score_id, emp, contribs) in enumerate(cases, 1):
+        if emp in held_out:
+            held += 1
+            continue
         if rng.random() < PENDING_SHARE:                  # left in the HR queue for the live demo
             pending += 1
             continue
@@ -170,7 +175,8 @@ def simulate_interventions(conn, run_id: str) -> dict:
     est = float(t.observed.mean() - c.observed.mean())
     se = float(np.sqrt(t.observed.var(ddof=1) / max(len(t), 1) + c.observed.var(ddof=1) / max(len(c), 1)))
     true = float((df.y1 - df.y0).mean())
-    return {"suggested": len(cases), "pending_review": pending, "reviewed": len(cases) - pending,
+    return {"suggested": len(cases), "pending_review": pending, "held_for_api_replay": held,
+            "reviewed": len(cases) - pending - held,
             "approved": len(int_rows),
             "dismissed": sum(r[3] == "dismissed" for r in rev_rows),
             "needs_info": sum(r[3] == "needs_info" for r in rev_rows),
@@ -282,7 +288,8 @@ def main() -> int:
         res = ev.evaluate_test(conn, src, fz)          # test labels read only after freezing
         runs = write_scores(conn, src, fz)
         creds = seed_users(conn, runs["logistic_regression"])
-        iv = simulate_interventions(conn, runs["logistic_regression"])
+        replay = json.loads((DATA_DIR / "fixtures" / "intervention_requests.json").read_text(encoding="utf-8"))
+        iv = simulate_interventions(conn, runs["logistic_regression"], frozenset(r["employee_id"] for r in replay))
         exc = log_data_exceptions(conn, DATA_DIR)
         conn.commit()
     (REPORTS / "evaluation.json").write_text(ev.dumps({"results": res, "interventions": iv,

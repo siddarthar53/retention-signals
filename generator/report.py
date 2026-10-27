@@ -174,7 +174,8 @@ def write_report(conn, ds, manifest: dict, out_dir: Path) -> Path:
     w("")
     w("| Issue | Target | Injected | Controls | Caught | Missed | False positives |")
     w("|---|---|---:|---:|---:|---:|---:|")
-    for r in _detection(conn, ds, out_dir):
+    detection = _detection(conn, ds, out_dir)
+    for r in detection:
         w("| " + " | ".join(str(x) for x in r) + " |")
     req = json.loads((out_dir / "fixtures" / "intervention_requests.json").read_text(encoding="utf-8"))
     w(f"| UNREVIEWED_SCORE | api.intervention_request | {sum(r['expected'] != 'none' for r in req)} | "
@@ -184,6 +185,13 @@ def write_report(conn, ds, manifest: dict, out_dir: Path) -> Path:
     w("")
     w("Per-file SHA-256 is in `manifest.json`. Two runs with the same seed and config must produce identical "
       "manifests (`tests/generator/test_history.py::test_two_runs_identical`).")
+    summary = {"scale": meta["scale"], "seed": meta["seed"],
+               "validator": {k: len(v) for k, v in res.items()},
+               "fk_constraints": len(orphans), "fk_orphans": sum(o[3] for o in orphans),
+               "detection": [dict(zip(["issue", "target", "injected", "controls", "caught", "missed",
+                                       "false_positives"], r)) for r in detection],
+               "voluntary_attrition_pct": round(100 * oc.get("exited_voluntary", 0) / n, 2)}
+    (out_dir / "g2_summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8", newline="\n")
     path = out_dir / "g2_report.md"
     path.write_text("\n".join(L) + "\n", encoding="utf-8", newline="\n")
     return path
