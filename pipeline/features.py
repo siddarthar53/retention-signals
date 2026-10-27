@@ -22,7 +22,7 @@ ALLOWED_SOURCES = {
     "events": "SELECT event_id, employee_id, event_type, event_date, recorded_at FROM core.employment_event",
     "assignments": "SELECT assignment_id, employee_id, change_reason, effective_from, recorded_at FROM core.assignment",
     "snapshots": """SELECT snapshot_id, employee_id, as_of_date, tenure_months, months_in_role,
-                           months_since_promotion, recorded_at FROM core.tenure_snapshot""",
+                           months_since_promotion, derived_from, recorded_at FROM core.tenure_snapshot""",
     "workload": """SELECT workload_id, employee_id, period_month, utilization_pct, after_hours_pct, oncall_days,
                           recorded_at FROM core.workload_snapshot""",
     "surveys": """SELECT survey_id, employee_id, wave, sent_date, response_status, engagement_index, recorded_at
@@ -54,7 +54,9 @@ def _typed(t: dict) -> dict:
             if c in ("hire_date", "event_date", "effective_from", "as_of_date", "period_month", "sent_date"):
                 df[c] = pd.to_datetime(df[c]).dt.date
             elif c == "recorded_at":
-                df[c] = pd.to_datetime(df[c], utc=True).dt.date
+                ts = pd.to_datetime(df[c], utc=True)
+                df["recorded_ts"] = ts.dt.strftime("%Y-%m-%dT%H:%M:%SZ")     # exact time, for lineage only
+                df[c] = ts.dt.date
             elif c in ("tenure_months", "months_in_role", "months_since_promotion", "utilization_pct",
                        "after_hours_pct", "engagement_index"):
                 df[c] = pd.to_numeric(df[c], errors="coerce").astype(float)
@@ -94,8 +96,7 @@ def build(src: Sources, as_of: dt.date) -> tuple[pd.DataFrame, pd.DataFrame]:
     agg3 = last3.groupby("employee_id").agg(util_mean_3m=("utilization_pct", "mean"),
                                              after_hours_mean_3m=("after_hours_pct", "mean"),
                                              oncall_mean_3m=("oncall_days", "mean"),
-                                             workload_months=("workload_id", "count"),
-                                             workload_refs=("workload_id", lambda s: list(s)))
+                                             workload_months=("workload_id", "count"))
     over = last4.assign(o=last4.utilization_pct > OVERLOAD_UTIL).groupby("employee_id")["o"].sum()
     f = f.merge(agg3, on="employee_id", how="left", validate="one_to_one")
     f["sustained_overload"] = f["employee_id"].map(over).fillna(0).ge(3).astype(float)
@@ -110,12 +111,24 @@ def build(src: Sources, as_of: dt.date) -> tuple[pd.DataFrame, pd.DataFrame]:
     f["engagement_latest"] = f["employee_id"].map(latest["engagement_index"])
     f["engagement_decline"] = (f["employee_id"].map(prev["engagement_index"]) - f["engagement_latest"]).clip(lower=0)
     f["latest_survey_status"] = f["employee_id"].map(last_status)
-    f["survey_ref"] = f["employee_id"].map(latest["survey_id"])
+    last_any = sv.groupby("employee_id").tail(1).set_index("employee_id")
 
     asg = src.tables["assignments"]
     recent = asg[(asg.change_reason == "transfer") & (asg.effective_from <= as_of) & (asg.recorded_at <= as_of)
                  & (asg.effective_from > as_of - dt.timedelta(days=182))]
     f["recent_transfer"] = f["employee_id"].isin(recent.employee_id).astype(float)
+
+    # Lineage: every row each feature (and coverage note) was computed from.
+    #   tenure, months_in_role, promo_clock, new_joiner  <- snapshot (its own derived_from lists the
+    #                                                       events/assignments/promotions behind it)
+    #   util/after-hours/on-call means                   <- last 3 workload rows; sustained_overload <- last 4
+    #   engagement_latest / decline                      <- latest and previous ANSWERED surveys
+    #   last_wave_no_response (coverage)                 <- latest survey of any status
+    #   recent_transfer                                  <- transfer assignments in the 182-day window
+    wl_refs = last4.groupby("employee_id")["workload_id"].agg(list)
+    sv_refs = pd.concat([latest["survey_id"], prev["survey_id"], last_any["survey_id"]]).groupby(level=0).agg(
+        lambda s: sorted(set(s)))
+    tr_refs = recent[recent.employee_id.isin(keys.employee_id)].groupby("employee_id")["assignment_id"].agg(list)
 
     f.insert(1, "as_of_date", as_of)
     coverage = pd.DataFrame({
@@ -125,7 +138,8 @@ def build(src: Sources, as_of: dt.date) -> tuple[pd.DataFrame, pd.DataFrame]:
         "workload_months_available": f.workload_months.fillna(0).astype(int),
     })
     lineage = pd.DataFrame({"employee_id": f.employee_id, "snapshot_id": f.snapshot_id,
-                            "workload_ids": f.workload_refs, "survey_id": f.survey_ref})
+                            "workload_ids": f.employee_id.map(wl_refs), "survey_ids": f.employee_id.map(sv_refs),
+                            "transfer_ids": f.employee_id.map(tr_refs)})
     out = f[["employee_id", "as_of_date"] + FEATURES].reset_index(drop=True)
     if out.employee_id.duplicated().any() or len(out) != len(pop):
         raise AssertionError("join contract broken: features must have exactly one row per scoring key")

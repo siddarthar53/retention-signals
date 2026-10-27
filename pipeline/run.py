@@ -23,6 +23,7 @@ from generator.core import ROOT
 
 from . import evaluate as ev
 from .features import Sources, build
+from .allocation import ALLOCATION_VERSION, assign_arm
 from .model import config_hash
 
 REPORTS = ROOT / "data" / "out" / "reports"
@@ -37,14 +38,29 @@ def _bands(n: int) -> list[str]:
     return ["suggested_checkin" if i < k1 else "monitor" if i < k2 else "none" for i in range(n)]
 
 
+def _source_refs(c, ts: dict, derived: dict) -> list[dict]:
+    """Every source row behind one score, with its exact recorded_at (see features.build lineage)."""
+    refs = [{"table": "core.tenure_snapshot", "id": c.snapshot_id, "recorded_at": ts["snapshots"][c.snapshot_id],
+             "derived_from": derived.get(c.snapshot_id)}]
+    for col, table, key in (("workload_ids", "core.workload_snapshot", "workload"),
+                            ("survey_ids", "core.engagement_survey", "surveys"),
+                            ("transfer_ids", "core.assignment", "assignments")):
+        for rid in (c[col] if isinstance(c[col], list) else []):
+            refs.append({"table": table, "id": rid, "recorded_at": ts[key][rid]})
+    return refs
+
+
 def write_scores(conn, src: Sources, fz) -> dict[str, str]:
+    """Score IDs are assigned in employee-ID order, never in rank order, so a case identifier reveals
+    nothing about a person's position in the list."""
     as_of = ev.TEST_DATE
     X, cov = build(src, as_of)
-    rec = {"core.workload_snapshot": dict(zip(src.tables["workload"].workload_id, src.tables["workload"].recorded_at)),
-           "core.engagement_survey": dict(zip(src.tables["surveys"].survey_id, src.tables["surveys"].recorded_at)),
-           "core.tenure_snapshot": dict(zip(src.tables["snapshots"].snapshot_id, src.tables["snapshots"].recorded_at))}
+    id_col = {"snapshots": "snapshot_id", "workload": "workload_id", "surveys": "survey_id", "assignments": "assignment_id"}
+    ts = {k: dict(zip(src.tables[k][c], src.tables[k].recorded_ts)) for k, c in id_col.items()}
+    snaps = src.tables["snapshots"]
+    derived = dict(zip(snaps.snapshot_id, snaps.derived_from))
+    assert X.employee_id.is_monotonic_increasing
     runs = {}
-    seq = 0
     for i, (name, model) in enumerate((("logistic_regression", fz.lr), ("scorecard", fz.sc)), 1):
         run_id = f"RUN-2026-{i:04d}"
         runs[name] = run_id
@@ -53,6 +69,8 @@ def write_scores(conn, src: Sources, fz) -> dict[str, str]:
                       "2026-07-01 06:00:00+00"))
         p = model.predict(X)
         order = np.argsort(-p, kind="stable")
+        rank_of = np.empty(len(order), dtype=int)
+        rank_of[order] = np.arange(1, len(order) + 1)
         bands = _bands(len(order))
         if name == "logistic_regression":
             contribs = model.contributions(X)
@@ -60,22 +78,15 @@ def write_scores(conn, src: Sources, fz) -> dict[str, str]:
             _, detail = model.points_detail(X)
             contribs = [[{"rule": d["rule"], "points": d["points"]} for d in row] for row in detail]
         rows = []
-        for rank, idx in enumerate(order, 1):
-            seq += 1
+        for idx in range(len(X)):                       # employee-ID order
             c = cov.iloc[idx]
-            refs = [{"table": "core.tenure_snapshot", "id": c.snapshot_id,
-                     "recorded_at": str(rec["core.tenure_snapshot"].get(c.snapshot_id))}]
-            for w in (c.workload_ids if isinstance(c.workload_ids, list) else []):
-                refs.append({"table": "core.workload_snapshot", "id": w,
-                             "recorded_at": str(rec["core.workload_snapshot"][w])})
-            if isinstance(c.survey_id, str):
-                refs.append({"table": "core.engagement_survey", "id": c.survey_id,
-                             "recorded_at": str(rec["core.engagement_survey"][c.survey_id])})
             coverage = {"no_answered_survey": bool(c.no_answered_survey),
                         "last_wave_no_response": bool(c.last_wave_no_response),
                         "workload_months_available": int(c.workload_months_available)}
-            rows.append((f"SCR-2026-{seq:07d}", run_id, X.employee_id.iloc[idx], round(float(p[idx]), 5), rank,
-                         bands[rank - 1], json.dumps(contribs[idx]), json.dumps(coverage), json.dumps(refs)))
+            rank = int(rank_of[idx])
+            rows.append((f"SCR-2026-{(i - 1) * len(X) + idx + 1:07d}", run_id, X.employee_id.iloc[idx],
+                         round(float(p[idx]), 5), rank, bands[rank - 1], json.dumps(contribs[idx]),
+                         json.dumps(coverage), json.dumps(_source_refs(c, ts, derived), default=str)))
         with conn.cursor() as cur:
             cur.executemany("INSERT INTO app.score VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)", rows)
     return runs
@@ -124,7 +135,7 @@ def simulate_interventions(conn, run_id: str, held_out: frozenset[str] = frozens
     rng = np.random.default_rng(ARM_SEED)
     cases = conn.execute("""SELECT score_id, employee_id, contributions FROM app.score
                             WHERE score_run_id = %s AND priority_band = 'suggested_checkin'
-                            ORDER BY rank_in_run""", (run_id,)).fetchall()
+                            ORDER BY employee_id""", (run_id,)).fetchall()
     hr = [r[0] for r in conn.execute("SELECT user_id FROM app.app_user WHERE app_role='hr_partner' ORDER BY 1")]
     rev_rows, int_rows, ev_rows, arms = [], [], [], {}
     pending = 0
@@ -146,7 +157,7 @@ def simulate_interventions(conn, run_id: str, held_out: frozenset[str] = frozens
                          f"{day} 10:05:00+00"))
         if decision != "approved":
             continue
-        arm = "treatment" if rng.random() < 0.8 else "control"
+        arm = assign_arm(emp, run_id)                 # same versioned rule as the live API
         top = next(c["feature"] for c in contribs if c["feature"] != "intercept")
         itype = INTERVENTION_FOR[top]
         int_id = f"INT-2026-{len(int_rows) + 1:06d}"
@@ -184,6 +195,7 @@ def simulate_interventions(conn, run_id: str, held_out: frozenset[str] = frozens
             "exit_rate_treatment": float(t.observed.mean()), "exit_rate_control": float(c.observed.mean()),
             "estimated_effect": est, "estimated_effect_ci95": [est - 1.96 * se, est + 1.96 * se],
             "true_simulated_effect": true,
+            "allocation": ALLOCATION_VERSION,
             "note": "Synthetic prevention assumption (30% of voluntary exits prevented when treated). The 80/20 "
                     "comparison is small and its interval is wide; this demonstrates the workflow, not real-world "
                     "causal evidence."}
