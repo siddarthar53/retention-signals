@@ -1,0 +1,98 @@
+# Master data specification — PROPOSAL v0.1 (pending Claude/ChatGPT agreement)
+# Everything here is synthetic. No external datasets, names or real organisations.
+# Counts marked "scales" are multiplied by scale.employees / 10000; the rest are fixed.
+
+version: 0.1
+seed: 20261022
+
+scale:
+  employees: 10000            # total employee histories (starter run: 500)
+  initial_share: 0.90         # employed on 2025-01-01; the rest are hired during the window
+  team_size_target: 15        # incl. the manager; a distribution target, not a hard limit
+
+window:
+  start: 2025-01-01
+  end: 2026-12-31             # observation_end
+  scoring_dates: [2025-03-31, 2025-06-30, 2025-09-30, 2025-12-31, 2026-03-31, 2026-06-30, 2026-09-30, 2026-12-31]
+
+compensation_bands:           # fixed: 6 (SYN = synthetic units / year); never used as predictors
+  - {band_id: BAND-01, level: 1, min: 30000,  mid: 36000,  max: 42000}
+  - {band_id: BAND-02, level: 2, min: 40000,  mid: 48000,  max: 56000}
+  - {band_id: BAND-03, level: 3, min: 54000,  mid: 65000,  max: 76000}
+  - {band_id: BAND-04, level: 4, min: 72000,  mid: 86000,  max: 100000}
+  - {band_id: BAND-05, level: 5, min: 95000,  mid: 114000, max: 133000}
+  - {band_id: BAND-06, level: 6, min: 125000, mid: 150000, max: 175000}
+
+job_families:                 # share of headcount; teams are allocated in the same proportions (scales)
+  engineering:   0.30
+  operations:    0.15
+  support:       0.15
+  sales:         0.13
+  data:          0.08
+  product:       0.07
+  finance_admin: 0.07
+  design:        0.05
+
+roles:                        # fixed: 8 families x (5 IC levels + 3 manager levels) = 64 roles
+  ic_levels: [1, 2, 3, 4, 5]
+  manager_levels: [4, 5, 6]
+  title_pattern: "{Family} {IC|Manager} L{level}"   # e.g. "Engineering IC L3", "Sales Manager L4"
+
+ic_level_mix:                 # individual contributors only (managers are 1 per team)
+  1: 0.25
+  2: 0.30
+  3: 0.25
+  4: 0.14
+  5: 0.06
+
+manager_level_mix:            # level of each team's people manager
+  4: 0.70
+  5: 0.25
+  6: 0.05
+
+teams:
+  count_full_scale: 600       # scales: round(initial employees / team_size_target)
+  name_pattern: "{Family} {NNN}"     # e.g. "Engineering 014"
+  created_date_range: [2012-01-01, 2024-06-30]
+  managers_per_team: 1        # exactly one manager assignment at a time, or a recorded vacancy
+  vacancy_policy: "manager exit -> vacancy; cases route to HR; filled by an internal promotion or an external hire within 1-3 months"
+
+tenure_at_window_start:       # hire dates for the initial population
+  distribution: gamma
+  mean_years: 4.0
+  shape: 1.6
+  min_months: 1
+  max_years: 18
+
+in_window_hires:
+  share_backfill: 0.7         # replacements for exits, ~1-3 months after the exit
+  share_growth: 0.3           # spread evenly across the 24 months
+
+notice_days_by_level: {1: 30, 2: 30, 3: 60, 4: 60, 5: 90, 6: 90}   # synthetic policy, not a legal claim
+
+calendar:
+  workdays: [Mon, Tue, Wed, Thu, Fri]
+  hours_per_day: 8
+  company_holidays_per_year:  # fixed synthetic list (same month-day each year)
+    ["01-01", "01-26", "03-14", "05-01", "08-15", "10-02", "10-20", "11-08", "12-25", "12-31"]
+
+leave_policy:                 # confirmed by Srikar
+  earned_leave: {accrual_per_employed_month: 1}
+  sick_leave: {grant_days: 3, granted_on: "Jan 1, or hire date for in-year joiners"}
+  year_end: "all unused EL and SL lapse on Dec 31; nothing carries over"
+  sick_leave_restricted: true   # never a feature, hazard input or manager-visible value
+
+engagement_survey:
+  waves_per_year: 4
+  sent_on: "15th of the last month of each quarter"
+  scale: [1, 5]
+  items: 5
+  response_rate: 0.80
+  partial_rate: 0.05
+  index_min_items: 3
+
+demo_users:                   # seeded app logins (passwords generated at seed time, never committed)
+  hr_partner: 2
+  manager: 6                  # mapped to managers of teams with suggested check-ins
+  it_ops: 1
+  admin: 1
