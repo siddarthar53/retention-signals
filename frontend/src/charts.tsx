@@ -19,8 +19,9 @@ export function FactorBars({ items }: { items: Contribution[] }) {
         const w = (Math.abs(r.log_odds) / max) * 50;
         const up = r.log_odds > 0;
         return (
-          <div key={r.feature} role="row" className={"factor" + (hover === r.feature ? " hot" : "")}
-               onMouseEnter={() => setHover(r.feature)} onMouseLeave={() => setHover(null)}>
+          <div key={r.feature} role="row" tabIndex={0} className={"factor" + (hover === r.feature ? " hot" : "")}
+               onMouseEnter={() => setHover(r.feature)} onMouseLeave={() => setHover(null)}
+               onFocus={() => setHover(r.feature)} onBlur={() => setHover(null)}>
             <span role="cell" className="factor-label">{r.label}</span>
             <span role="cell" className="factor-track" aria-hidden="true">
               <span className={"factor-bar " + (up ? "up" : "down")}
@@ -31,15 +32,17 @@ export function FactorBars({ items }: { items: Contribution[] }) {
               {fmtVal(r.value)} <span className="quiet">vs {fmtVal(r.reference)}</span>
               <span className="sr">{up ? "raises" : "lowers"} priority by {Math.abs(r.log_odds).toFixed(2)} log-odds</span>
             </span>
-            {hover === r.feature && (
-              <span className="tip" role="tooltip">
-                {up ? "Raises" : "Lowers"} the log-odds by {Math.abs(r.log_odds).toFixed(2)}. This person: {fmtVal(r.value)}.
-                Average in training: {fmtVal(r.reference)}.
-              </span>
-            )}
           </div>
         );
       })}
+      <p className="readout" aria-live="polite">
+        {(() => {
+          const r = rows.find((x) => x.feature === hover);
+          if (!r) return "Point at a row to see its exact effect.";
+          return `${r.label}: ${r.log_odds > 0 ? "raises" : "lowers"} the log-odds by ${Math.abs(r.log_odds).toFixed(2)}. ` +
+                 `This person ${fmtVal(r.value)}, training average ${fmtVal(r.reference)}.`;
+        })()}
+      </p>
     </div>
   );
 }

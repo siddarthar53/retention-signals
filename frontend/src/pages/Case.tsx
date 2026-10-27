@@ -102,17 +102,18 @@ function HrView({ c, reload }: { c: HrCase; reload: () => void }) {
         </div>
 
         <aside className="case-side">
+          {approved && (                 /* the next step comes first once HR has approved */
+            <ConversationPanel scoreId={c.score_id} interventions={c.interventions} themes={c.themes}
+                               types={c.intervention_types} onDone={reload} canStart={!c.eligibility && c.is_active_run} />
+          )}
           <section className="panel decide">
             <h2>HR review</h2>
             {latest && <p><Pill tone={approved ? "ok" : "muted"}>{REVIEW[latest.decision]}</Pill> <span className="quiet">by {latest.reviewer}, {fmtDate(latest.decided_at)}</span></p>}
             {latest && <p className="small">{label(REASON, latest.reason_code)}{latest.comment ? `: ${latest.comment}` : ""}</p>}
             {locked ? <p className="quiet small">The review is locked because a conversation has been started.</p>
-              : c.is_active_run && !c.eligibility && <ReviewForm c={c} onDone={reload} again={!!latest} />}
+              : c.is_active_run && !c.eligibility &&
+                <ReviewForm key={latest?.review_id ?? "none"} c={c} onDone={reload} again={!!latest} />}
           </section>
-          {approved && (
-            <ConversationPanel scoreId={c.score_id} interventions={c.interventions} themes={c.themes}
-                               types={c.intervention_types} onDone={reload} canStart={!c.eligibility && c.is_active_run} />
-          )}
           {c.reviews.length > 1 && (
             <section className="panel">
               <h3>Review history</h3>
@@ -139,6 +140,7 @@ function ReviewForm({ c, onDone, again }: { c: HrCase; onDone: () => void; again
     e.preventDefault(); setBusy(true); setErr(null);
     try {
       await api.post(`/cases/${c.score_id}/review`, { decision, reason_code: reason, comment: comment.trim() || null });
+      setOpen(false);
       onDone();
     } catch (x) { setErr(x as ApiError); } finally { setBusy(false); }
   }
