@@ -25,9 +25,9 @@ that gate and must ship with a failing fixture.
 | Labels vs outcome: each label status/target matches the outcome dates and the horizon (incl. LABEL_DATE_MISMATCH detection) | Validator | done (G2): `generator/validate.py` |
 | Pre-window careers feasible: promotions spaced >= 1.5 years, between hire and 2024-12-31, level increases by 1 | Validator | done (G2): `generator/validate.py` |
 | Totals: exact employee count; realised hire mix reported; attrition within 5-15% | Validator | done (G2): `generator/validate.py` |
-| As-of reconstruction: filter by recorded_at <= cutoff and date <= as_of BEFORE deriving intervals | Pipeline code | planned (G4) |
-| Features never use eval, SL, compensation, team or manager IDs, or missingness as a risk term | Pipeline code (allowlist) | planned (G4) |
-| Trainer reads only train/validation labels; test labels only in the evaluator | Pipeline code | planned (G4) |
+| As-of reconstruction: filter by recorded_at <= cutoff and date <= as_of BEFORE deriving intervals | Pipeline code | done (G4): `pipeline/`, `tests/pipeline` |
+| Features never use eval, SL, compensation, team or manager IDs, or missingness as a risk term | Pipeline code (allowlist) | done (G4): `pipeline/features.py`, `tests/pipeline` |
+| Trainer reads only train/validation labels; test labels only in the evaluator | Pipeline code | done (G4): `pipeline/`, `tests/pipeline` |
 | Sick leave cannot be recovered from model inputs (paired-record invariance) | Generator + test | done (G2): `tests/generator/test_history.py` |
 | Review gate: approved review, same employee and score version, team scope, eligibility, chronology, arm, no conflicting intervention | API service (one transaction) | planned (G5) |
 | Actor identity from the session only; 403 for other teams' cases; 409 for workflow conflicts | API service | planned (G5) |

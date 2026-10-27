@@ -4,7 +4,7 @@ Synthetic workforce data and an explainable, HR-reviewed workflow for **prioriti
 retention conversations**. Scores are suggestions to check in with someone; they are never
 employment decisions. All data is synthetic: no real people, names or sensitive attributes.
 
-> Status: **G1 accepted; G2 (data generator) built, awaiting review.** Scoring, API and UI follow in G4-G5. Design reference: Agreement v1 (Claude + ChatGPT).
+> Status: **G1 accepted; G2 (generator) and G4 (model pipeline) built, awaiting review.** API and UI follow in G5. Design reference: Agreement v1 (Claude + ChatGPT).
 
 ## Requirements (Windows or Linux)
 
@@ -32,6 +32,7 @@ copy .env.example .env            # then edit .env: DATABASE_ADMIN_URL, RS_APP_P
 | Generate data (starter 500 / full 10,000) into `data/out/<scale>/` | `python -m generator.run --scale 500` |
 | Generate, **DELETE and reload** `retention`, validate, write `g2_report.md` | `python -m generator.run --scale 10000 --load` |
 | Re-calibrate the attrition intercept on development seeds (only if dynamics change) | `python -m generator.calibrate` |
+| Train, freeze, evaluate on the 2026-06-30 hold-out, write scores, demo logins and simulated interventions | `python -m pipeline.run` |
 
 ## Layout
 
