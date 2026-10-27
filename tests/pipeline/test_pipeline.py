@@ -129,3 +129,47 @@ def test_training_never_reads_test_labels(env, monkeypatch):
 
 def test_feature_list_excludes_identifiers_and_leave():
     assert not any(k in f for f in FEATURES for k in ("team", "manager", "band", "leave", "sick", "employee_id"))
+
+
+# ---------------- regression tests for the ChatGPT/Codex review of 95842be (finding 5)
+def _from_lineage(src, lin, drop=lambda col, ids: ids):
+    """Sources restricted to ONLY the rows a lineage declares (population tables stay complete)."""
+    t = dict(src.tables)
+    keep = lambda col: {i for ids in lin[col] if isinstance(ids, list) for i in drop(col, ids)}
+    t["snapshots"] = src.tables["snapshots"][src.tables["snapshots"].snapshot_id.isin(set(lin.snapshot_id))]
+    t["workload"] = src.tables["workload"][src.tables["workload"].workload_id.isin(keep("workload_ids"))]
+    t["surveys"] = src.tables["surveys"][src.tables["surveys"].survey_id.isin(keep("survey_ids"))]
+    t["assignments"] = src.tables["assignments"][src.tables["assignments"].assignment_id.isin(keep("transfer_ids"))]
+    return Sources(t)
+
+
+@pytest.mark.parametrize("as_of", AS_OFS)
+def test_every_feature_reconstructs_from_its_declared_lineage(env, as_of):
+    _, src, _ = env
+    full, lin = build(src, as_of)
+    again, _ = build(_from_lineage(src, lin), as_of)
+    pd.testing.assert_frame_equal(full, again)
+
+
+def test_lineage_check_detects_an_omitted_dependency(env):
+    """Dropping the previous answered survey from the lineage must change engagement_decline somewhere."""
+    _, src, _ = env
+    as_of = dt.date(2026, 6, 30)
+    full, lin = build(src, as_of)
+    sv = src.tables["surveys"].set_index("survey_id")
+
+    def drop_prev(col, ids):
+        if col != "survey_ids":
+            return ids
+        answered = sorted((i for i in ids if not pd.isna(sv.loc[i, "engagement_index"])), key=lambda i: sv.loc[i, "sent_date"])
+        return [i for i in ids if len(answered) < 2 or i != answered[-2]]
+    broken, _ = build(_from_lineage(src, lin, drop_prev), as_of)
+    assert not full["engagement_decline"].equals(broken["engagement_decline"])
+
+
+def test_lineage_has_four_workload_months_and_exact_timestamps(env):
+    _, src, _ = env
+    _, lin = build(src, dt.date(2026, 6, 30))
+    n = lin.workload_ids.map(lambda x: len(x) if isinstance(x, list) else 0)
+    assert (n >= lin.workload_months_available).all() and (n == 4).any()      # last 4 months, superset of last 3
+    assert src.tables["workload"].recorded_ts.str.match(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$").all()

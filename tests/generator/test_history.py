@@ -225,3 +225,34 @@ def test_label_fixtures_cover_all_variants(run500):
     variants = {g[1].split("-", 2)[2] for g in ds.ground_truth if g[4] == "LABEL_DATE_MISMATCH"}
     assert {"stayed_labelled_exit", "left_labelled_stayed", "target_contradicts_status", "not_employed_at_as_of",
             "edge_exit"} <= variants
+
+
+# ---------------- regression tests for the ChatGPT/Codex review of 95842be (finding 3)
+def _state(clock, mgr_q):
+    from generator.history import State
+    return State(base_int=1.0, core=1.0, x=1.0, eng_base=3.5, eng=3.5, pull=0.0, mgr_q=mgr_q, clock_start=clock)
+
+
+def test_survey_career_inputs_ignore_changes_after_submission():
+    """A promotion or transfer dated AFTER a survey's submission day cannot change that survey's inputs."""
+    from generator.history import career_as_of
+    st = _state(dt.date(2020, 1, 1), 0.3)
+    st.career_month_start = (dt.date(2020, 1, 1), 0.3)
+    st.clock_start, st.mgr_q = dt.date(2026, 6, 25), -0.9          # live state already moved on
+    st.career_changes = [(dt.date(2026, 6, 25), dt.date(2026, 6, 25), -0.9)]
+    assert career_as_of(st, dt.date(2026, 6, 20)) == (dt.date(2020, 1, 1), 0.3)   # submitted before the change
+    assert career_as_of(st, dt.date(2026, 6, 25)) == (dt.date(2026, 6, 25), -0.9)  # same day: change applies
+    st.career_changes.insert(0, (dt.date(2026, 6, 3), dt.date(2026, 6, 3), 0.1))   # earlier change applies
+    assert career_as_of(st, dt.date(2026, 6, 20)) == (dt.date(2026, 6, 3), 0.1)
+
+
+def test_generator_reads_survey_career_state_as_of_submission(monkeypatch, tmp_path):
+    """The simulator asks for career state on each survey's own submission day, never later."""
+    import generator.history as h
+    calls = []
+    real = h.career_as_of
+    monkeypatch.setattr(h, "career_as_of", lambda st, day: (calls.append(day), real(st, day))[1])
+    ds, _ = generate(300, tmp_path)
+    submitted = sorted(dt.date.fromisoformat(s.submitted_at[:10]) for s in ds.reg.surveys
+                       if s.response_status != "no_response")
+    assert calls and sorted(calls) == submitted

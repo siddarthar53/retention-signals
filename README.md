@@ -8,7 +8,7 @@ performance decision. All data is synthetic: no real people, names or sensitive 
 |---|---|
 | Data | 10 entities, 10,000 employees, 24 months (2025-2026), voluntary attrition 10.3% (required 5-15%) |
 | Edge cases | 4 planted issue types with look-alike controls and ground truth: future leakage, missing survey treated as low, label/date mismatch, action without HR approval |
-| Checks | 31 semantic validator rules, every foreign key, byte-identical reruns (SHA-256 manifest), 139 tests |
+| Checks | 30 semantic validator rules, all 31 foreign keys, byte-identical reruns (SHA-256 manifest), 163 tests |
 | Model | Logistic regression + points scorecard, temporal split (train 2025 Q1-Q2, validate Q3, test 2026-06-30 once) |
 | App | FastAPI + PostgreSQL + React. HR reviews every suggestion before a manager sees it; managers never see scores |
 
@@ -45,7 +45,8 @@ Notes for Windows:
 - Windows Smart App Control blocks the DLLs in pandas 3.1.0. `requirements.txt` caps pandas below 3.1;
   3.0.5 is tested. Do not turn Smart App Control off to work around it.
 - The app runs on a simulated clock (`APP_NOW`, default 2026-07-15) so the 30 Jun 2026 list is the current one.
-- To change the UI: `cd frontend; npm ci; npm run dev` (port 5173, proxies `/api` to 8000), then `npm run build`.
+- To change the UI: `cd frontend; npm ci; npm run dev` (port 5173, proxies `/api` to 8000), then `npm run build`
+  and `python scripts/frontend_provenance.py` (a test fails if `dist/` no longer matches its source).
 
 ## What each role sees
 
@@ -60,8 +61,18 @@ Employees are the subject of the data and do not sign in.
 
 **The approval rule.** Starting a conversation is checked in this order, in one transaction: requester's team scope (403),
 current score version (409), latest HR decision is "approved" (409), person still eligible (409), no existing or
-comparison-group action (409). Every blocked attempt is written to `app.exception_log`. Approved cases are split 80/20
-into conversation and comparison groups by a fixed hash, so the effect of conversations can be measured.
+comparison-group action (409). Every blocked attempt is written to `app.exception_log`. A manager's authority is
+re-checked on every read and write: their own current role must be a people-manager role in the person's current
+team, and they must not have left. Owning a conversation never overrides that. Teams with a vacant manager seat
+are handled by HR. Approved cases are split 80/20 into conversation and comparison groups by one versioned rule
+(`pipeline/allocation.py`), used by both the simulated reviews and the live API.
+
+**What a manager can infer.** Being listed at all tells a manager that HR chose a check-in for that person; this
+is inherent to the workflow. Case IDs follow employee order, list order is by employee ID, and topics are
+neutral ("Workload and priorities") in a fixed order, so neither rank nor the strongest factor is revealed.
+
+**Sessions** expire on the real clock (8 hours) and are revoked server-side on sign-out; the simulated business
+clock is used only for workforce data.
 
 **Least privilege.** The API connects as `rs_app_login`, which cannot read labels, outcomes, the leave ledger, pay bands,
 capacity/actual hours or raw survey items, and can only insert into the audit tables (tests assert each denial).
@@ -76,9 +87,14 @@ capacity/actual hours or raw survey items, and can only insert into the audit ta
 | Calibration slope | 0.94 | 0.88 |
 
 Pre-declared checks: three met; "scorecard reaches 75% of the model's PR-AUC" was **not met** (0.51) and is
-reported, not tuned away. Replay of 700 planted approval-rule requests through the API: 327/327 blocked, 0 false
-blocks on 329 valid requests, 44 skipped (no manager in that team on the replay date). Full reports:
-`data/out/10000/g2_report.md`, `data/out/reports/evaluation.md`, `data/out/reports/replay.json`.
+reported, not tuned away. These are the corrected results after correction C1 (see `docs/corrections.md`); the
+test list had already been inspected, so this is a corrected evaluation, not a fresh untouched test.
+
+Replay of all 700 planted approval-rule requests through the API, each required to return its exact status and
+reason: 350/350 blocked with the expected reason (no review, dismissed, superseded LR score, other team), 350/350
+valid requests created a conversation record with the shared allocation rule, 0 skipped (vacant-manager teams are
+replayed by HR). Full reports: `data/out/10000/g2_report.md`, `data/out/reports/evaluation.md`,
+`data/out/reports/replay.json`.
 
 ## Limitations
 
@@ -86,8 +102,9 @@ blocks on 329 valid requests, 44 skipped (no manager in that team on the replay 
   would likely be lower. The evaluation rules were fixed before the test list was scored and not retuned afterwards.
 - **Circularity.** The model learns the generator's own assumptions (promotion clock, engagement, workload). The results
   show the pipeline works, not that these factors drive attrition in a real company.
-- **Intervention effect.** The 80/20 comparison has ~65 controls; its interval is wide and includes zero. It
-  demonstrates the measurement workflow, not causal evidence.
+- **Intervention effect.** The 80/20 comparison has 60 controls. The estimate (-12.5 points, 95% CI -23.2 to -1.8)
+  is far from the simulated truth (-3.2) and moved by 5 points when the allocation rule changed. It demonstrates
+  the measurement workflow, not causal evidence.
 - **Single timeline.** Interventions do not re-simulate history; outcomes for treated people come from pre-computed
   potential outcomes (30% prevention assumption).
 - Logins are local demo accounts. For a hosted demo, set `SECURE_COOKIES=true` behind HTTPS.
@@ -119,7 +136,7 @@ dictionary is `docs/data_dictionary.md`.
 | `pipeline/` | As-of features, scorecard + logistic regression, temporal evaluation, scoring |
 | `backend/app/` | FastAPI: sessions, roles, approval rule (`gate.py`), read models |
 | `frontend/` | React + Vite + TypeScript UI (`dist/` is the committed build) |
-| `docs/` | Data dictionary, enforcement map, generator design |
+| `docs/` | Data dictionary, enforcement map, generator design, correction history |
 | `tests/` | pytest: schema, generator, pipeline, API |
 
 The repository is public: never commit `.env`, passwords or generated data (`data/`, `outputs/` are ignored).
