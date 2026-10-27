@@ -155,10 +155,30 @@ CHECKS.update({
 })
 
 
+CHECKS["leave_sl_grant_each_employed_year"] = """
+    SELECT e.employee_id || ':' || y FROM core.employee e
+    CROSS JOIN (VALUES (2025), (2026)) v(y)
+    LEFT JOIN core.attrition_outcome o USING (employee_id)
+    WHERE e.hire_date <= make_date(y, 12, 31)
+      AND (o.termination_date IS NULL OR o.termination_date >= make_date(y, 1, 1))
+      AND NOT EXISTS (SELECT 1 FROM core.leave_ledger l WHERE l.employee_id = e.employee_id
+                      AND l.txn_type = 'grant' AND l.leave_year = y)"""
+
+LABEL_TARGET_RULE = """
+    SELECT l.employee_id || '@' || l.as_of_date FROM {t} l
+    WHERE NOT COALESCE(CASE l.label_status WHEN 'voluntary_exit' THEN l.target = 1
+                       WHEN 'employed_through_horizon' THEN l.target = 0 WHEN 'competing_exit' THEN l.target = 0
+                       ELSE l.target IS NULL END, false)"""
+
+
 def label_mismatches_in(conn, table: str) -> set[str]:
-    """Apply the label reconciliation rule to any label-shaped table (used for injected fixtures)."""
-    q = CHECKS["label_matches_outcome"].replace("eval.horizon_label", table)
-    return {r[0] for r in conn.execute(q).fetchall()}
+    """Every label rule applied to any label-shaped table (used for injected fixtures):
+    status vs outcome dates, target vs status, and 'labels only for people employed on as_of'."""
+    out = set()
+    for q in (CHECKS["label_matches_outcome"], CHECKS["label_only_for_employed"], LABEL_TARGET_RULE):
+        q = q.replace("eval.horizon_label", table).replace("{t}", table)
+        out |= {r[0] for r in conn.execute(q).fetchall()}
+    return out
 
 
 def run(conn) -> dict[str, list]:

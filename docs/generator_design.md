@@ -153,6 +153,21 @@ features (persisted and reloaded from PostgreSQL), including low-capacity months
 - **Exit-to-backfill:** manager exits create vacancies (internal fill or external manager hire);
   other exits create backfills while the 70% target lasts; the rest of the exact hire total is growth.
 
+## 8b. v0.2.2: fixes from the independent review of 91b6df8 (all findings applied)
+- EL and SL blocks can no longer share a workday; capacity counts each leave day once (MAJOR 1).
+- Injection v2: cases and controls drawn in random order from one shuffled pool (MAJOR 2); FUTURE_LEAK
+  variants on both sides of the cutoff (late recorded, future event, one second late; controls at
+  23:59:59 on as_of, prior month, on time); LABEL_DATE_MISMATCH adds "not employed at as_of" and
+  "target contradicts status", controls are the correct labels nearest the horizon edge, and the
+  fixture detector applies all three label rules (MAJOR 3).
+- SL grant for in-window hires on the 1st of a month; validator now also checks for a missing grant (MINOR 4).
+- Tenure snapshots recorded at 23:59 on as_of; the feature builder no longer needs a +1 day exception (MINOR 5).
+- Survey non-response centred on the population's mean intensity (1.03): shares 75.8 / 4.0 / 20.2 (MINOR 6).
+- Vacancy fills run after the month's hazards with a unique, deterministic candidate order; external
+  manager hires start the following month (MINOR 7).
+- Known simplification kept and documented: no career event in a person's resignation month (MINOR 8).
+- b0 re-calibrated on dev seeds after these dynamics changes (-7.0829).
+
 ## 9. Outputs
 `data/out/<scale>/canonical/*.csv|json`, `seed.sql` (COPY format), `fixtures/`,
 `ground_truth.csv|json`, `manifest.json` (config hash, seed, row counts, SHA-256 per file),

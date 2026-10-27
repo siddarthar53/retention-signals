@@ -132,7 +132,7 @@ def build_snapshots(reg: Registry) -> list[Snapshot]:
             out.append(Snapshot(
                 emp, q, a, f"{months_between(emp.hire_date, q):.2f}", f"{months_between(_role_start(a), q):.2f}",
                 f"{months_between(last_p.effective_date, q):.2f}" if last_p else None,
-                stable_json(lineage), ts(q + dt.timedelta(days=1), 6)))
+                stable_json(lineage), ts(q, 23, 59)))      # derived at the close of the as_of day
     return out
 
 

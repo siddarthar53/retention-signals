@@ -79,7 +79,7 @@ def build(src: Sources, as_of: dt.date) -> tuple[pd.DataFrame, pd.DataFrame]:
     keys = pop.copy()
 
     snap = src.tables["snapshots"]
-    snap = snap[(snap.as_of_date == as_of) & (snap.recorded_at <= as_of + dt.timedelta(days=1))]
+    snap = snap[(snap.as_of_date == as_of) & (snap.recorded_at <= as_of)]
     f = keys.merge(snap[["employee_id", "snapshot_id", "tenure_months", "months_in_role", "months_since_promotion"]],
                    on="employee_id", how="left", validate="one_to_one")
     clock = f["months_since_promotion"].fillna(f["tenure_months"])        # promotion clock: never NULL

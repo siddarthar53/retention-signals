@@ -35,7 +35,7 @@ careers:
 
 hazard:
   voluntary:                     # monthly logit
-    b0: -7.1403                 # calibrated, see provenance
+    b0: -7.0829                 # calibrated, see provenance
     engagement_gap: 0.90         # x (3.6 - engagement)
     engagement_decline: 1.50     # x max(0, engagement 6 months ago - now)
     sustained_overload: 0.60     # in a sustained-overload episode for >= 3 months
@@ -56,7 +56,8 @@ leave_use:
   sl_days: [1, 2]
 
 survey:
-  intensity_nonresponse_slope: 0.60    # P(respond) = clip(0.80 - slope x (intensity - 1), 0.5, 0.95)
+  intensity_nonresponse_slope: 0.60    # P(respond) = clip(0.80 - slope x (intensity - reference), 0.5, 0.95)
+  intensity_reference: 1.03            # population mean intensity (mean utilisation ~103%), so overall response ~80%
   item_noise_sd: 0.50
 
 recording_lag_days:
@@ -75,4 +76,4 @@ calibration:
   target_voluntary_termination_rate: 0.10   # voluntary terminations 2025-2026 / N
   dev_seeds: [101, 202, 303]
   dev_scale: 3000
-  provenance: "b0=-7.1403 gives 0.1024 on dev seeds [101, 202, 303] at scale 3000 (target 0.1); bisection on [-9, -4], 12 steps; 2026-10-27"
+  provenance: "b0=-7.0829 gives 0.1002 on dev seeds [101, 202, 303] at scale 3000 (target 0.1); bisection on [-9, -4], 12 steps; 2026-10-27"

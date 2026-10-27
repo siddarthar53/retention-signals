@@ -77,8 +77,16 @@ def test_as_of_month_workload_never_used(env):
 def test_injected_future_leak_sources_never_in_lineage(env):
     _, src, out_dir = env
     with open(out_dir / "fixtures" / "feature_sources.csv", newline="", encoding="utf-8") as fh:
-        leaks = [r for r in csv.DictReader(fh) if r["source_table"] == "core.workload_snapshot"]
-    assert leaks
+        rows = list(csv.DictReader(fh))
+    leaks = [r for r in rows if r["source_table"] == "core.workload_snapshot"
+             and r["variant"] in ("late_recorded", "future_event")]
+    controls = [r for r in rows if r["variant"] == "prior_month"]
+    assert leaks and controls
+    for r in controls:                       # the legitimate prior-month row IS used
+        as_of = dt.date.fromisoformat(r["as_of_date"])
+        _, lineage = build(src, as_of)
+        used = {w for ws in lineage.workload_ids if isinstance(ws, list) for w in ws}
+        assert r["source_id"] in used
     for r in leaks:
         as_of = dt.date.fromisoformat(r["as_of_date"])
         _, lineage = build(src, as_of)

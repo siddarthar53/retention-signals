@@ -1,9 +1,10 @@
 """Monthly simulation 2025-01 .. 2026-12 (generator design v0.2, section 4).
 
 Causal rule: every random outcome in month m is a function of the latent state fixed on the 1st of m
-(plus that month's own draws). Code order inside a month is: growth scheduling -> vacancy decisions
--> hires -> leave credits -> latent update -> exit hazards -> career events -> exits/backfills ->
-leave taken -> workload -> survey -> Dec 31 lapse. Hazards are drawn before career events and
+(plus that month's own draws). Code order inside a month is: growth scheduling -> hires -> leave
+credits -> latent update -> exit hazards -> vacancy fills (external manager hires start next month)
+-> career events -> exits/backfills -> leave taken -> workload -> survey -> Dec 31 lapse.
+Known simplification: a person who resigns in month m has no career event in m (no leakage). Hazards are drawn before career events and
 leave/workload/survey only so those rows can stop at the termination date (and no career event
 can fall after an exit); hazards never read anything produced later in the month.
 """
@@ -86,6 +87,7 @@ class Simulator:
                    pull=float(r.normal(0, self.g["latent"]["external_pull"]["sd"])),
                    mgr_q=float(r.normal(0, self.g["latent"]["manager_quality"]["sd"])), clock_start=clock)
         self.state[emp] = st
+        emp._seq = len(self.state)                      # unique, deterministic creation order
         team = emp.current.team
         self.team_members[team].add(emp)
         if emp.current.role.is_people_manager:
@@ -169,10 +171,11 @@ class Simulator:
         for emp in active:
             day = max(first, emp.hire_date)
             self._leave(emp, "EL", "accrual", 1, day, 0)
-            if m == 1 and emp.hire_date <= first:
-                self._leave(emp, "SL", "grant", 3, first, 0)
-            elif emp.hire_date > first:
+            hired_this_month = (emp.hire_date.year, emp.hire_date.month) == (y, m)
+            if hired_this_month:                       # in-year joiner (incl. a hire on the 1st): grant on hire date
                 self._leave(emp, "SL", "grant", 3, emp.hire_date, 0)
+            elif m == 1:                               # everyone else employed on Jan 1
+                self._leave(emp, "SL", "grant", 3, first, 0)
 
     def _latent_update(self, active, y, m):
         L, E = self.g["latent"]["intensity"], self.g["latent"]["engagement"]
@@ -249,7 +252,7 @@ class Simulator:
                                  if self._employed_on(e, first) and e.hire_date <= first
                                  and self.state[e].resign_date is None and self.state[e].termination is None
                                  and not e.current.role.is_people_manager and e.current.role.level >= 3],
-                                key=lambda e: (-e.current.role.level, e.hire_date, e.sort_key))
+                                key=lambda e: (-e.current.role.level, e.hire_date, e._seq))
             internal = candidates and self.rng.random() < self.g["careers"]["vacancy_internal_share"]
             if internal:
                 emp = candidates[0]
@@ -269,8 +272,9 @@ class Simulator:
                     self.team_manager[team] = emp
                     self.stats["internal_manager_fills"] += 1
             if not internal:
-                if self.hires_scheduled < self.hires_total:
-                    day = self._random_workday(y, m, first)
+                nxt = add_months(first, 1)
+                if self.hires_scheduled < self.hires_total and nxt <= self.window_end:
+                    day = self._random_workday(nxt.year, nxt.month, nxt)     # external hire starts next month
                     self.pending_hires.append((day, "manager_backfill", team, role))
                     self.hires_scheduled += 1
                     self.backfills_scheduled += 1
@@ -356,19 +360,26 @@ class Simulator:
             elif r.random() < (U["el_december_prob"] if m == 12 else U["el_block_prob_per_month"]):
                 want = el_bal if m == 12 else int(r.integers(U["el_block_days"][0], U["el_block_days"][1] + 1))
             el_days = int(min(want, el_bal, n - 1 - used))
+            el_span = (0, 0)
             if el_days > 0:
                 start = int(r.integers(0, n - el_days + 1))
                 self._leave(emp, "EL", "taken", -el_days, sched[start], 1)
                 used += el_days
+                el_span = (start, start + el_days)
             # sick leave
             sl_days = 0
             if r.random() < U["sl_prob_per_month"]:
                 want = int(r.integers(U["sl_days"][0], U["sl_days"][1] + 1))
                 sl_days = int(min(want, self._bal(emp, y, "SL"), n - 1 - used))
-                if sl_days > 0:
-                    start = int(r.integers(0, n - sl_days + 1))
+                # SL is a consecutive block of workdays that does not touch the EL block
+                starts = [i for i in range(0, n - sl_days + 1)
+                          if i + sl_days <= el_span[0] or i >= el_span[1]] if sl_days > 0 else []
+                if starts:
+                    start = starts[int(r.integers(len(starts)))]
                     self._leave(emp, "SL", "taken", -sl_days, sched[start], 1)
                     used += sl_days
+                else:
+                    sl_days = 0
             # workload (utilisation first, actual exact)
             util10 = int(round(min(st.x * 100, 250.0) * 10))
             available = (n - used) * 8
@@ -392,7 +403,7 @@ class Simulator:
         if not self._employed_on(emp, sent):
             return
         wave = f"{y}Q{(m - 1) // 3 + 1}"
-        p_resp = float(np.clip(0.80 - S["intensity_nonresponse_slope"] * (st.x - 1.0), 0.5, 0.95))
+        p_resp = float(np.clip(0.80 - S["intensity_nonresponse_slope"] * (st.x - S["intensity_reference"]), 0.5, 0.95))
         sub_lag = int(r.integers(R["survey_submission_after_send"][0], R["survey_submission_after_send"][1] + 1))
         submit_day = sent + dt.timedelta(days=sub_lag)
         responds = r.random() < p_resp and (st.termination is None or submit_day <= st.termination)
@@ -436,7 +447,6 @@ class Simulator:
             if (y, m) == months[-1]:
                 extra = max(0, self.hires_total - self.hires_scheduled - growth_plan.get((y, m), 0))
             self._schedule_growth_hires(y, m, growth_plan.get((y, m), 0) + extra)
-            self._fill_vacancies(y, m)            # decided at month start; may add hires for this month
             self._process_hires(y, m)
             first, end = dt.date(y, m, 1), cal.month_end(y, m)
             active = [e for e in self.reg.employees if self._employed_on(e, end) or
@@ -445,6 +455,7 @@ class Simulator:
             self._leave_credits(active, y, m)
             self._latent_update(active, y, m)
             self._hazards(active, y, m)
+            self._fill_vacancies(y, m)            # after hazards: a candidate who exits this month is never chosen
             self._career_events(active, y, m)
             self._record_exits_in_month(y, m)
             self._leave_taken_workload_survey(active, y, m)

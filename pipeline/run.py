@@ -26,8 +26,10 @@ from .features import Sources, build
 from .model import config_hash
 
 REPORTS = ROOT / "data" / "out" / "reports"
+DATA_DIR = ROOT / "data" / "out" / "10000"     # generated dataset whose fixtures are audited
 SUGGESTED_SHARE, MONITOR_SHARE = 0.05, 0.10
 ARM_SEED = 20261022 + 7
+PENDING_SHARE = 0.15          # suggested check-ins left unreviewed so the HR queue has live work
 
 
 def _bands(n: int) -> list[str]:
@@ -124,7 +126,11 @@ def simulate_interventions(conn, run_id: str) -> dict:
                             ORDER BY rank_in_run""", (run_id,)).fetchall()
     hr = [r[0] for r in conn.execute("SELECT user_id FROM app.app_user WHERE app_role='hr_partner' ORDER BY 1")]
     rev_rows, int_rows, ev_rows, arms = [], [], [], {}
+    pending = 0
     for i, (score_id, emp, contribs) in enumerate(cases, 1):
+        if rng.random() < PENDING_SHARE:                  # left in the HR queue for the live demo
+            pending += 1
+            continue
         u = rng.random()
         decision, reason = (("approved", "supportive_checkin") if u < 0.90 else
                             ("dismissed", "context_known_to_hr") if u < 0.98 else ("needs_info", "await_manager_input"))
@@ -164,7 +170,8 @@ def simulate_interventions(conn, run_id: str) -> dict:
     est = float(t.observed.mean() - c.observed.mean())
     se = float(np.sqrt(t.observed.var(ddof=1) / max(len(t), 1) + c.observed.var(ddof=1) / max(len(c), 1)))
     true = float((df.y1 - df.y0).mean())
-    return {"reviewed": len(cases), "approved": len(int_rows),
+    return {"suggested": len(cases), "pending_review": pending, "reviewed": len(cases) - pending,
+            "approved": len(int_rows),
             "dismissed": sum(r[3] == "dismissed" for r in rev_rows),
             "needs_info": sum(r[3] == "needs_info" for r in rev_rows),
             "treatment": int(len(t)), "control": int(len(c)),
@@ -174,6 +181,49 @@ def simulate_interventions(conn, run_id: str) -> dict:
             "note": "Synthetic prevention assumption (30% of voluntary exits prevented when treated). The 80/20 "
                     "comparison is small and its interval is wide; this demonstrates the workflow, not real-world "
                     "causal evidence."}
+
+
+def log_data_exceptions(conn, data_dir: Path) -> dict:
+    """Run the G2 detectors over the injected fixtures and record each detection in app.exception_log
+    (metadata only; raw payloads stay in the fixtures folder)."""
+    import csv
+    from generator.validate import label_mismatches_in
+    from .asof import audit_engagement_feature, audit_feature_source
+    found = []
+    fx = data_dir / "fixtures"
+    with open(fx / "feature_sources.csv", newline="", encoding="utf-8") as fh:
+        for r in csv.DictReader(fh):
+            if audit_feature_source(r["event_date"], r["recorded_at"], r["as_of_date"]):
+                found.append(("feature_source", f"{r['employee_id']}@{r['as_of_date']}:{r['source_id']}:{r['variant']}", "FUTURE_LEAK",
+                              "pipeline.asof.audit_feature_source", {"as_of": r["as_of_date"], "source": r["source_table"]}))
+    with open(fx / "feature_engagement.csv", newline="", encoding="utf-8") as fh:
+        for r in csv.DictReader(fh):
+            if audit_engagement_feature(r["survey_status"], r["engagement_feature"] or None):
+                found.append(("feature_engagement", f"{r['employee_id']}@{r['survey_sent_date']}", "MISSING_AS_NEGATIVE",
+                              "pipeline.asof.audit_engagement_feature", {"survey_status": r["survey_status"]}))
+    conn.execute("CREATE TEMP TABLE fx_survey (LIKE core.engagement_survey INCLUDING CONSTRAINTS)")
+    with open(fx / "core.engagement_survey.csv", newline="", encoding="utf-8") as fh:
+        for r in csv.DictReader(fh):
+            try:
+                with conn.transaction():
+                    conn.execute(f"INSERT INTO fx_survey ({', '.join(r)}) VALUES ({', '.join(['%s'] * len(r))})",
+                                 [None if v == "" else v for v in r.values()])
+            except psycopg.errors.CheckViolation as e:
+                found.append(("core.engagement_survey", r["survey_id"], "QUARANTINED_ROW", "db.check_constraint",
+                              {"constraint": e.diag.constraint_name, "case": "MISSING_AS_NEGATIVE"}))
+    conn.execute("CREATE TEMP TABLE fx_label (LIKE eval.horizon_label)")
+    with conn.cursor() as cur, cur.copy("COPY fx_label FROM STDIN WITH (FORMAT csv, HEADER true)") as cp:
+        cp.write((fx / "eval.horizon_label.csv").read_bytes())
+    for key in sorted(label_mismatches_in(conn, "fx_label")):
+        found.append(("eval.horizon_label", key, "LABEL_DATE_MISMATCH", "generator.validate.label_matches_outcome", {}))
+    rows = [(f"EXC-2026-{i:06d}", ent, rid, issue, det, json.dumps(detail), "2026-07-01 05:00:00+00", "open")
+            for i, (ent, rid, issue, det, detail) in enumerate(found, 1)]
+    with conn.cursor() as cur:
+        cur.executemany("INSERT INTO app.exception_log VALUES (%s,%s,%s,%s,%s,%s,%s,%s)", rows)
+    counts = {}
+    for _, _, issue, _, _ in found:
+        counts[issue] = counts.get(issue, 0) + 1
+    return counts
 
 
 def evaluation_markdown(fz, res: dict, iv: dict) -> str:
@@ -202,7 +252,8 @@ def evaluation_markdown(fz, res: dict, iv: dict) -> str:
         vs = f"[{v[0]:.2f}, {v[1]:.2f}]" if isinstance(v, list) else f"{v:.3f}"
         L.append(f"| {k} | {vs} | {d.get('target', '> 1')} | {'yes' if d['met'] else '**no**'} |")
     L += ["", "## Simulated interventions (2026-06-30 suggested check-ins)", "",
-          f"Reviewed {iv['reviewed']}: approved {iv['approved']}, dismissed {iv['dismissed']}, needs info "
+          f"Suggested {iv['suggested']}; left pending in the HR queue {iv['pending_review']}; "
+          f"reviewed {iv['reviewed']}: approved {iv['approved']}, dismissed {iv['dismissed']}, needs info "
           f"{iv['needs_info']}. Arms: treatment {iv['treatment']}, control {iv['control']}.", "",
           f"Voluntary-exit rate by horizon end: treatment {iv['exit_rate_treatment']:.1%}, control "
           f"{iv['exit_rate_control']:.1%}. Estimated effect {iv['estimated_effect']:+.1%} "
@@ -232,8 +283,10 @@ def main() -> int:
         runs = write_scores(conn, src, fz)
         creds = seed_users(conn, runs["logistic_regression"])
         iv = simulate_interventions(conn, runs["logistic_regression"])
+        exc = log_data_exceptions(conn, DATA_DIR)
         conn.commit()
-    (REPORTS / "evaluation.json").write_text(ev.dumps({"results": res, "interventions": iv}) + "\n", encoding="utf-8")
+    (REPORTS / "evaluation.json").write_text(ev.dumps({"results": res, "interventions": iv,
+                                                       "data_exceptions_logged": exc}) + "\n", encoding="utf-8")
     (REPORTS / "evaluation.md").write_text(evaluation_markdown(fz, res, iv), encoding="utf-8", newline="\n")
     cred_path = ROOT / "data" / "out" / "demo_credentials.txt"
     cred_path.write_text("# Demo logins (local only, never commit)\n" +

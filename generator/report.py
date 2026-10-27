@@ -63,7 +63,7 @@ def _detection(conn, ds, out_dir: Path) -> list[tuple]:
     with open(out_dir / "fixtures" / "feature_sources.csv", newline="", encoding="utf-8") as f:
         for r in csv.DictReader(f):
             if audit_feature_source(r["event_date"], r["recorded_at"], r["as_of_date"]):
-                det.add(f"{r['employee_id']}@{r['as_of_date']}:{r['source_id']}")
+                det.add(f"{r['employee_id']}@{r['as_of_date']}:{r['source_id']}:{r['variant']}")
     score("FUTURE_LEAK", "feature_source", det)
     # MISSING_AS_NEGATIVE (a): rows the database refuses (quarantine)
     det = set()

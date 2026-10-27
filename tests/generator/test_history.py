@@ -148,3 +148,80 @@ def test_build_requires_calibrated_b0(monkeypatch):
     monkeypatch.setattr(r, "load_generator_config", fake)
     with pytest.raises(SystemExit, match="not calibrated"):
         build(100)
+
+
+# ---------------- regression tests for the independent review of 91b6df8
+def _blocks(ds):
+    """Rebuild each taken-leave block as consecutive scheduled workdays from its txn_date."""
+    from generator import calendar as cal
+    from generator.derived import facts
+    out = {}
+    for t in ds.reg.leave:
+        if t.txn_type != "taken":
+            continue
+        f = facts(t.employee)
+        days = [w for w in cal.workdays_in_month(t.txn_date.year, t.txn_date.month)
+                if w >= t.txn_date and w >= t.employee.hire_date and (f.termination is None or w <= f.termination)]
+        out.setdefault((t.employee, t.txn_date.year, t.txn_date.month), []).append((t.leave_type, days[:-t.days]))
+    return out
+
+
+def test_el_and_sl_never_share_a_day_and_capacity_counts_each_day_once(run500):
+    """Review MAJOR 1: an EL day and an SL day can never be the same workday."""
+    ds, _, _ = run500
+    blocks = _blocks(ds)
+    wl = {(w.employee, w.period_month.year, w.period_month.month): w for w in ds.reg.workload}
+    both = 0
+    for key, bl in blocks.items():
+        sets = [set(d) for _, d in bl]
+        union = set().union(*sets)
+        assert sum(len(s) for s in sets) == len(union), key
+        both += len(bl) > 1
+        w = wl[key]
+        assert w.available_hours == (w.scheduled_workdays - len(union)) * 8, key
+    assert both > 0, "fixture should contain months with both EL and SL"
+
+
+def test_every_employed_year_has_one_sl_grant_incl_hires_on_the_first(loaded):
+    """Review MINOR 4."""
+    conn, _, _ = loaded
+    assert validate.run(conn)["leave_sl_grant_each_employed_year"] == []
+    firsts = conn.execute("""SELECT count(*) FROM core.employee e WHERE e.hire_date >= '2025-01-01'
+                             AND extract(day FROM e.hire_date) = 1""").fetchone()[0]
+    granted = conn.execute("""SELECT count(*) FROM core.employee e WHERE e.hire_date >= '2025-01-01'
+                              AND extract(day FROM e.hire_date) = 1 AND EXISTS (SELECT 1 FROM core.leave_ledger l
+                              WHERE l.employee_id = e.employee_id AND l.txn_type = 'grant' AND l.txn_date = e.hire_date)""").fetchone()[0]
+    assert firsts == granted
+
+
+def test_snapshots_are_available_on_their_as_of_date(run500):
+    """Review MINOR 5: no exception to the as-of rule is needed for snapshots."""
+    from pipeline.asof import is_available
+    ds, _, _ = run500
+    assert all(is_available(s.as_of, s.recorded_at, s.as_of) for s in ds.snapshots)
+
+
+def test_intervention_request_cases_and_controls_not_confounded(run500):
+    """Review MAJOR 2: cases and controls are drawn from one shuffled pool."""
+    ds, _, out_dir = run500
+    req = json.loads((out_dir / "fixtures" / "intervention_requests.json").read_text(encoding="utf-8"))
+    fam_case = {r["job_family"] for r in req if r["expected"] != "none"}
+    fam_ctrl = {r["job_family"] for r in req if r["expected"] == "none"}
+    assert len(fam_case & fam_ctrl) >= 3
+
+
+def test_future_leak_fixtures_cover_both_sides_of_the_cutoff(run500):
+    """Review MAJOR 3: boundary variants exist, including a control at 23:59:59 on as_of."""
+    import csv as _csv
+    _, _, out_dir = run500
+    with open(out_dir / "fixtures" / "feature_sources.csv", newline="", encoding="utf-8") as fh:
+        variants = {r["variant"] for r in _csv.DictReader(fh)}
+    assert {"late_recorded", "future_event", "one_second_late", "at_cutoff", "prior_month", "on_time"} <= variants
+
+
+def test_label_fixtures_cover_all_variants(run500):
+    import csv as _csv
+    ds, _, _ = run500
+    variants = {g[1].split("-", 2)[2] for g in ds.ground_truth if g[4] == "LABEL_DATE_MISMATCH"}
+    assert {"stayed_labelled_exit", "left_labelled_stayed", "target_contradicts_status", "not_employed_at_as_of",
+            "edge_exit"} <= variants
