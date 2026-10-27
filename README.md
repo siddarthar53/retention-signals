@@ -1,48 +1,125 @@
 # Retention Signals
 
 Synthetic workforce data and an explainable, HR-reviewed workflow for **prioritising supportive
-retention conversations**. Scores are suggestions to check in with someone; they are never
-employment decisions. All data is synthetic: no real people, names or sensitive attributes.
+retention conversations**. A score is a suggestion to check in with someone. It is never an employment, pay or
+performance decision. All data is synthetic: no real people, names or sensitive attributes.
 
-> Status: **G1 accepted; G2 (generator) and G4 (model pipeline) built, awaiting review.** API and UI follow in G5. Design reference: Agreement v1 (Claude + ChatGPT).
+| | |
+|---|---|
+| Data | 10 entities, 10,000 employees, 24 months (2025-2026), voluntary attrition 10.3% (required 5-15%) |
+| Edge cases | 4 planted issue types with look-alike controls and ground truth: future leakage, missing survey treated as low, label/date mismatch, action without HR approval |
+| Checks | 31 semantic validator rules, every foreign key, byte-identical reruns (SHA-256 manifest), 139 tests |
+| Model | Logistic regression + points scorecard, temporal split (train 2025 Q1-Q2, validate Q3, test 2026-06-30 once) |
+| App | FastAPI + PostgreSQL + React. HR reviews every suggestion before a manager sees it; managers never see scores |
 
-## Requirements (Windows or Linux)
+## Run it on Windows (about 5 minutes)
 
-- PostgreSQL 16 (local service), Python 3.12+, Node 20+ (UI, later gates)
-- Reported test runs so far: Linux, PostgreSQL 16.15, Python 3.13.17 (`requirements.lock`). The target
-  Windows machine (Python 3.14.7, PostgreSQL 16.15) has not run the suite yet.
-
-## Setup
+Needs PostgreSQL 16 running locally, Python 3.12+ and Git. Node is **not** needed: the built UI is committed.
 
 ```powershell
+git clone https://github.com/srikar045p/retention-signals.git
+cd retention-signals
 python -m venv .venv
-.venv\Scripts\activate            # Linux/macOS: source .venv/bin/activate
-pip install -r requirements.lock        # exact tested versions (requirements.txt = ranges)
-copy .env.example .env            # then edit .env: DATABASE_ADMIN_URL, RS_APP_PASSWORD
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+copy .env.example .env
+notepad .env        # set your postgres password in DATABASE_ADMIN_URL and choose RS_APP_PASSWORD
 ```
+
+Build the database, the model and the demo users, then start the app:
+
+```powershell
+python scripts/db_reset.py                         # DELETES and recreates database "retention"
+python -m generator.run --scale 10000 --load       # generate, validate, load 818,803 rows
+python -m pipeline.run                             # train, evaluate, score, demo users
+python scripts/replay_requests.py                  # replay planted requests through the API (rolled back)
+python -m uvicorn backend.app.main:app --port 8000
+```
+
+Open <http://127.0.0.1:8000>. Logins are in `data\out\demo_credentials.txt` (local only, never committed):
+`hr1`/`hr2` (HR partner), `manager1`..`manager6`, `itops1`, `admin1`.
+
+Notes for Windows:
+
+- If a password in `DATABASE_ADMIN_URL` contains `@ : / # %`, URL-encode it (`@` is `%40`).
+- Windows Smart App Control blocks the DLLs in pandas 3.1.0. `requirements.txt` caps pandas below 3.1;
+  3.0.5 is tested. Do not turn Smart App Control off to work around it.
+- The app runs on a simulated clock (`APP_NOW`, default 2026-07-15) so the 30 Jun 2026 list is the current one.
+- To change the UI: `cd frontend; npm ci; npm run dev` (port 5173, proxies `/api` to 8000), then `npm run build`.
+
+## What each role sees
+
+| Role | Pages | Never sees |
+|---|---|---|
+| HR partner | Overview, review queue, full case (factors, workload, survey, scorecard), conversations, data quality, evaluation | Pay, sick leave, raw survey answers |
+| Manager | Approved cases in their own team only: themes, conversation guide, progress | Scores, ranks, model numbers, other teams, unapproved cases |
+| IT operations | Data quality, evaluation, scoring runs | Individual cases |
+| Administrator | Overview, users, runs, data quality, evaluation | Individual cases |
+
+Employees are the subject of the data and do not sign in.
+
+**The approval rule.** Starting a conversation is checked in this order, in one transaction: requester's team scope (403),
+current score version (409), latest HR decision is "approved" (409), person still eligible (409), no existing or
+comparison-group action (409). Every blocked attempt is written to `app.exception_log`. Approved cases are split 80/20
+into conversation and comparison groups by a fixed hash, so the effect of conversations can be measured.
+
+**Least privilege.** The API connects as `rs_app_login`, which cannot read labels, outcomes, the leave ledger, pay bands,
+capacity/actual hours or raw survey items, and can only insert into the audit tables (tests assert each denial).
+
+## Results (seed 20261022, test list 30 Jun 2026)
+
+| Measure | Model | Scorecard |
+|---|---:|---:|
+| Leavers in top 5% vs average (lift) | 6.8x (95% CI 5.5-8.2) | 5.7x |
+| Recall in top 10% | 52% | 49% |
+| ROC AUC | 0.82 | 0.79 |
+| Calibration slope | 0.94 | 0.88 |
+
+Pre-declared checks: three met; "scorecard reaches 75% of the model's PR-AUC" was **not met** (0.51) and is
+reported, not tuned away. Replay of 700 planted approval-rule requests through the API: 327/327 blocked, 0 false
+blocks on 329 valid requests, 44 skipped (no manager in that team on the replay date). Full reports:
+`data/out/10000/g2_report.md`, `data/out/reports/evaluation.md`, `data/out/reports/replay.json`.
+
+## Limitations
+
+- **Synthetic signal strength.** The generator's hazard model makes signals cleaner than real HR data; real-world lift
+  would likely be lower. The evaluation rules were fixed before the test list was scored and not retuned afterwards.
+- **Circularity.** The model learns the generator's own assumptions (promotion clock, engagement, workload). The results
+  show the pipeline works, not that these factors drive attrition in a real company.
+- **Intervention effect.** The 80/20 comparison has ~65 controls; its interval is wide and includes zero. It
+  demonstrates the measurement workflow, not causal evidence.
+- **Single timeline.** Interventions do not re-simulate history; outcomes for treated people come from pre-computed
+  potential outcomes (30% prevention assumption).
+- Logins are local demo accounts. For a hosted demo, set `SECURE_COOKIES=true` behind HTTPS.
 
 ## Commands
 
 | What | Command |
 |---|---|
 | **DELETES** and recreates database `retention`, loads the schema, creates API login | `python scripts/db_reset.py` |
-| Run all tests (creates/drops its own `retention_test` database) | `python -m pytest` |
-| Regenerate the data dictionary (fails if any column is undocumented) | `python scripts/gen_dictionary.py` |
-| Check the committed dictionary is complete and up to date | `python scripts/gen_dictionary.py --check` |
+| Run all tests (creates/drops `retention_test`; API tests use the built `retention` database) | `python -m pytest` |
+| Regenerate / check the data dictionary | `python scripts/gen_dictionary.py [--check]` |
 | Generate data (starter 500 / full 10,000) into `data/out/<scale>/` | `python -m generator.run --scale 500` |
 | Generate, **DELETE and reload** `retention`, validate, write `g2_report.md` | `python -m generator.run --scale 10000 --load` |
 | Re-calibrate the attrition intercept on development seeds (only if dynamics change) | `python -m generator.calibrate` |
-| Train, freeze, evaluate on the 2026-06-30 hold-out, write scores, demo logins and simulated interventions | `python -m pipeline.run` |
+| Train, freeze, evaluate, write scores, demo logins and simulated interventions | `python -m pipeline.run` |
+| Replay the planted approval-rule requests through the API | `python scripts/replay_requests.py` |
+| Start the app | `python -m uvicorn backend.app.main:app --port 8000` |
+
+Exports: `data/out/10000/canonical/*.csv` (+ `eval/`), `seed.sql`, `manifest.json` (SHA-256 per file); the data
+dictionary is `docs/data_dictionary.md`.
 
 ## Layout
 
 | Path | Contents |
 |---|---|
 | `db/schema.sql` | PostgreSQL schema (core / app / eval), constraints, grants, column descriptions |
-| `config/master_data.yaml` | Master-data spec and generation contracts C1-C5 |
-| `docs/data_dictionary.md` | Generated data dictionary |
-| `docs/enforcement.md` | Which layer enforces each rule |
-| `scripts/` | Database reset and dictionary generator |
-| `tests/` | pytest suites |
+| `config/` | Master-data spec (contracts C1-C5) and generator parameters |
+| `generator/` | Registry, monthly simulation, derived snapshots and labels, injection, validator, exports |
+| `pipeline/` | As-of features, scorecard + logistic regression, temporal evaluation, scoring |
+| `backend/app/` | FastAPI: sessions, roles, approval rule (`gate.py`), read models |
+| `frontend/` | React + Vite + TypeScript UI (`dist/` is the committed build) |
+| `docs/` | Data dictionary, enforcement map, generator design |
+| `tests/` | pytest: schema, generator, pipeline, API |
 
 The repository is public: never commit `.env`, passwords or generated data (`data/`, `outputs/` are ignored).
