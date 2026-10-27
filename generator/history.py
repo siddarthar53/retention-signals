@@ -43,6 +43,10 @@ class State:
     termination: dt.date | None = None
     exit_type: str | None = None
     eng_hist: list = field(default_factory=list)     # engagement on the 1st of each simulated month
+    # Career inputs to the survey, as of the 1st of the month, plus dated changes during the month, so a
+    # survey answer only reflects promotions/transfers that happened on or before its submission day.
+    career_month_start: tuple = ()
+    career_changes: list = field(default_factory=list)
     bal: dict = field(default_factory=dict)          # (year, type) -> balance
 
 
@@ -227,6 +231,7 @@ class Simulator:
                 self.reg.add_promotion(emp, self.reg.role(role.job_family, role.level + 1, role.is_people_manager),
                                        day, ts(day))
                 st.clock_start = day; st.fresh_until = add_months(day, 6)
+                st.career_changes.append((day, st.clock_start, st.mgr_q))
                 self.stats["promotions"] += 1
                 continue
             if not role.is_people_manager and self.rng.random() < C["transfer_prob_per_month"]:
@@ -239,6 +244,7 @@ class Simulator:
                         self.team_members[team].discard(emp); self.team_members[new_team].add(emp)
                         st.mgr_q = float(self.rng.normal(0, self.g["latent"]["manager_quality"]["sd"]))
                         st.last_transfer = day; st.fresh_until = add_months(day, 6)
+                        st.career_changes.append((day, st.clock_start, st.mgr_q))
                         self.stats["transfers"] += 1
 
     def _fill_vacancies(self, y, m):
@@ -264,6 +270,7 @@ class Simulator:
                     if lvl == 3:
                         self.reg.add_promotion(emp, self.reg.role(team.job_family, 4, True), day, ts(day))
                         self.state[emp].clock_start = day
+                        self.state[emp].career_changes.append((day, day, self.state[emp].mgr_q))
                         self.stats["promotions"] += 1
                     else:
                         self.reg.add_assignment(emp, team, self.reg.role(team.job_family, lvl, True), day,
@@ -411,9 +418,10 @@ class Simulator:
             self.reg.surveys.append(Survey(emp, wave, sent, "no_response", (None,) * 5, None, None,
                                            ts(sent + dt.timedelta(days=8), 7)))
             return
-        clock_m = months_between(st.clock_start, sent)
+        clock_start, mgr_q = career_as_of(st, submit_day)
+        clock_m = months_between(clock_start, sent)
         means = [st.eng, st.eng - 0.8 * (st.x - 1.0), st.eng - 0.01 * max(0.0, clock_m - 24),
-                 st.eng + 0.4 * st.mgr_q, st.eng]
+                 st.eng + 0.4 * mgr_q, st.eng]
         items = [int(np.clip(round(mu + r.normal(0, S["item_noise_sd"])), 1, 5)) for mu in means]
         if r.random() < 0.05:                                  # partial: keep 1-4 items
             keep = int(r.integers(1, 5))
@@ -455,6 +463,10 @@ class Simulator:
             self._leave_credits(active, y, m)
             self._latent_update(active, y, m)
             self._hazards(active, y, m)
+            for e in active:
+                st_e = self.state[e]
+                st_e.career_month_start = (st_e.clock_start, st_e.mgr_q)
+                st_e.career_changes = []
             self._fill_vacancies(y, m)            # after hazards: a candidate who exits this month is never chosen
             self._career_events(active, y, m)
             self._record_exits_in_month(y, m)
@@ -464,6 +476,16 @@ class Simulator:
         self.stats["vacancies_open_at_end"] = sum(1 for t, e in self.team_manager.items() if e is None)
         self.stats["hires_scheduled"] = self.hires_scheduled
         return self.stats
+
+
+def career_as_of(st: State, day: dt.date) -> tuple:
+    """(clock_start, manager quality) in force on `day`: month-start values plus only the changes dated on
+    or before `day`. A promotion or transfer later in the month cannot alter an earlier survey answer."""
+    clock_start, mgr_q = st.career_month_start or (st.clock_start, st.mgr_q)
+    for d, c, q in sorted(st.career_changes, key=lambda t: t[0]):
+        if d <= day:
+            clock_start, mgr_q = c, q
+    return clock_start, mgr_q
 
 
 def _role_start(emp: Employee) -> dt.date:
