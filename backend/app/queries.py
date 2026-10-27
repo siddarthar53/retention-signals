@@ -32,6 +32,15 @@ CONVERSATION_GUIDE = {
     "settling_in": ["Ask how the new team or role is going.", "Check they have the context and contacts they need.",
                     "Offer a buddy or regular short check-ins."],
 }
+# Managers get neutral conversation topics in a FIXED order: no statement about the person's survey
+# answers or workload numbers, and no ordering that reveals which factor weighed most.
+MANAGER_TOPIC_ORDER = ("career", "workload", "settling_in", "engagement")
+MANAGER_TOPICS = {
+    "career": "Career growth and next steps",
+    "workload": "Workload and priorities",
+    "settling_in": "Settling into the team or role",
+    "engagement": "How work is going overall",
+}
 PURPOSE = ("This is a prompt for a supportive conversation, not a prediction about a person and never a basis for "
            "performance, pay or employment decisions.")
 
@@ -57,6 +66,12 @@ def themes(contributions: list[dict], limit: int = 3) -> list[dict]:
         if len(out) == limit:
             break
     return out
+
+
+def manager_topics(contributions: list[dict]) -> list[dict]:
+    found = {t["theme"] for t in themes(contributions)}
+    return [{"theme": k, "text": MANAGER_TOPICS[k], "guide": CONVERSATION_GUIDE[k]}
+            for k in MANAGER_TOPIC_ORDER if k in found]
 
 
 def employee_context(conn, emp: str, at: dt.datetime) -> dict:
@@ -194,7 +209,7 @@ def case_for_manager(conn, score_id: str, at: dt.datetime) -> dict | None:
     return {"score_id": s[0], "employee_id": s[1], "as_of_date": iso(s[9]),
             "context": {k: ctx.get(k) for k in ("team_name", "role_title", "job_family", "hire_date")},
             "tenure_months": num(snap[0], 1) if snap else None, "months_in_role": num(snap[1], 1) if snap else None,
-            "themes": themes(s[6]), "approved_by": approved[-1]["reviewer"] if approved else None,
+            "themes": manager_topics(s[6]), "approved_by": approved[-1]["reviewer"] if approved else None,
             "approved_reason": approved[-1]["reason_code"] if approved else None,
             "interventions": ivs, "intervention_types": gate.INTERVENTION_TYPES,
             "eligibility": gate.ineligible_reason(conn, s[1], at), "purpose": PURPOSE}
@@ -207,9 +222,10 @@ def manager_cases(conn, user: User, at: dt.datetime) -> dict:
         SELECT s.score_id, s.employee_id, s.contributions, {review_status_sql()} AS review, {intervention_status_sql()} AS iv
         FROM app.score s WHERE s.score_run_id = %(run)s AND s.employee_id <> %(me)s
           AND (SELECT team_id FROM core.assignment a WHERE a.employee_id = s.employee_id AND a.effective_from <= %(d)s
-               AND a.recorded_at <= %(t)s ORDER BY a.effective_from DESC LIMIT 1) = %(team)s""",
+               AND a.recorded_at <= %(t)s ORDER BY a.effective_from DESC LIMIT 1) = %(team)s
+        ORDER BY s.employee_id""",
                         {"run": run, "me": user.employee_id, "d": at.date(), "t": at, "team": team}).fetchall()
-    items = [{"score_id": r[0], "employee_id": r[1], "themes": [t["text"] for t in themes(r[2], 2)],
+    items = [{"score_id": r[0], "employee_id": r[1], "themes": [t["text"] for t in manager_topics(r[2])],
               "intervention": r[4], "context": employee_context(conn, r[1], at)}
              for r in rows if r[3] == "approved"]
     team_name = conn.execute("SELECT team_name FROM core.team WHERE team_id = %s", (team,)).fetchone() if team else None

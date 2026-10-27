@@ -59,7 +59,7 @@ export default function Queue() {
           </select>
         </label>
         <label className="grow">Employee ID
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="EMP-004790" maxLength={20} />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="EMP-00" maxLength={20} />
         </label>
         <button className="secondary">Find</button>
       </form>

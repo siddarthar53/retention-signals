@@ -1,0 +1,31 @@
+{
+ "dist": {
+  "dist/assets/index-BXZcA_XD.js": "48f3beab967dd63e06e566673d7ff651948643d83578410ce760910d9149ecc2",
+  "dist/assets/index-DRNVZZNW.css": "cf5bc5d41d231248373356b1fc5ec5d7d7bd413a44c4e65c8604fe94b28a21e1",
+  "dist/index.html": "fbf760d19db1b8028d00ad06863356d1e62b540cd97731caea41bcf716b30c4b"
+ },
+ "source": {
+  "index.html": "6ecdf9adbc0d17f9b11106a6c7e8a7dd35cf57d9277bef5fa9f6a8653f800b0a",
+  "package-lock.json": "654f33b8e131e40b20727b31b4870e1a3f4e01aa3982b1e2b00b571950487eea",
+  "package.json": "9ab411ff51e79edc39dbd75eaa6549adb7e431c1a7f348f9592a0cee600dd38f",
+  "src/App.tsx": "24892982c3300970506be390cf299c4f1e0e8f91493bc046d957cb7b7f576ba2",
+  "src/api.ts": "7347a684e20946777438e74f01f44f8237ec4f60345234a3d97fbcc0c2313dcd",
+  "src/charts.tsx": "0bc40e658d96654a9aaebd25bab6eaaf80b2f1f82e1d1324ae7ce32733ba5dec",
+  "src/hooks.ts": "80085b1397a00a9e8b687be7f10bb60f36897e199cbd08de16dbb3525317e6a2",
+  "src/main.tsx": "824e6aabaede287055220fda22d0b88c1a05049745b2d8a8d16142210162a0b0",
+  "src/pages/Admin.tsx": "1154b76df20e92f95223d5037a70779bf3998267933736969e9c8e06a59191b8",
+  "src/pages/Case.tsx": "a9a95aaeb26ed685535ea34e5fa0d2c57555a7979ada173e084e8bde3cb81145",
+  "src/pages/Evaluation.tsx": "47c715425477cfcc24a857c0615a618c7971ef1b133b3a885d91387e4fc6ac21",
+  "src/pages/Interventions.tsx": "1833cbf6fb0a6b25cb8672147be5e3deefa986fcb7172bceffabb1701e13eb01",
+  "src/pages/Login.tsx": "a1d1af1067f11f03dcf485f4ebddadff3f3fa928f66b7eb9764b8affc825bef3",
+  "src/pages/MyCases.tsx": "78cd2faf1871c2fa021055df84feb6b00b2f318a6b2952555b96a3de516e9a3c",
+  "src/pages/Overview.tsx": "9b14a9148a0f7f40ac1442c99064773ceda63761fde0607d444bface52df826f",
+  "src/pages/Quality.tsx": "00c3005313cef990f3cfa2bdcd61d248277d8118d0ecfc3a0904c8fb41a322f7",
+  "src/pages/Queue.tsx": "a1620411ba6dd5aefc225c45a090c04b19a93fd98a7c539b44f91d01887a781e",
+  "src/styles.css": "09506a71633101bf2913e7223eeaf8a05a1ae3b28f64e0331e7a39935976a13b",
+  "src/ui.tsx": "75a879a9333e2f48d9e7776113e2d1133a29ca631ed65e8ee9a5ca97f8d11b00",
+  "src/words.ts": "baae3fdefc46523d2ece0e1a9d5465489f1b37679ddb790f02df494cc1e47bbd",
+  "tsconfig.json": "0b8b50c155314f127598c041898732fe55c320567ddca4e41ba0bd1e947847fb",
+  "vite.config.ts": "dd0eaa23ea9fd51f196b8df937b8541ed559feec7bd0907b882f73faed20619d"
+ }
+}

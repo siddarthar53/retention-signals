@@ -7,8 +7,10 @@ interface Det { issue: string; target: string; injected: number; controls: numbe
 interface DQ {
   generation: { scale: number; seed: number; validator: Record<string, number>; fk_constraints: number; fk_orphans: number;
     detection: Det[]; voluntary_attrition_pct: number } | null;
-  replay: { fixture_requests: number; replayed: number; skipped: Record<string, number>; caught: number; missed: number;
-    false_positives: number; valid_allowed: number; by_variant: Record<string, { n: number; blocked: number; issue_types: Record<string, number> }> } | null;
+  replay: { fixture_requests: number; replayed: number; skipped: number; caught: number; missed: number; unexpected_count: number;
+    false_positives: number; valid_allowed: number;
+    by_variant: Record<string, { fixture: number; replayed: number; as_expected: number; expected: { http: number; issue_type: string | null };
+      observed_issue_types: Record<string, number>; requester: Record<string, number> }> } | null;
 }
 interface Exc { exception_id: string; entity: string; record_id: string; issue_type: string; detector: string; detail: Record<string, unknown>; detected_at: string; status: string }
 
@@ -84,16 +86,21 @@ export default function Quality() {
           <h2>Approval rule, replayed through the API</h2>
           <p className="quiet">
             {r.replayed} of {r.fixture_requests} planted requests were sent to the real API with the app's own database
-            permissions, then rolled back. {Object.entries(r.skipped).map(([k, v]) => `${v} skipped (${k.replace(/_/g, " ")})`).join(", ")}.
+            permissions, then rolled back. Each had to return its exact expected answer and reason;
+            {r.unexpected_count === 0 ? " all did." : ` ${r.unexpected_count} did not.`} Requests for teams without a
+            manager were made by HR, as the app routes them.
           </p>
           <div className="table-wrap">
             <table>
-              <thead><tr><th>Request</th><th className="num">Sent</th><th className="num">Blocked</th><th>Reason given</th></tr></thead>
+              <thead><tr><th>Request</th><th className="num">Sent</th><th>Expected answer</th><th className="num">As expected</th></tr></thead>
               <tbody>
                 {Object.entries(r.by_variant).map(([k, v]) => (
                   <tr key={k}>
-                    <td>{VARIANT[k] ?? k}</td><td className="num">{v.n}</td><td className="num">{v.blocked}</td>
-                    <td>{Object.keys(v.issue_types).map((i) => ISSUE[i] ?? i).join(", ") || <span className="quiet">Allowed</span>}</td>
+                    <td>{VARIANT[k] ?? k}<div className="quiet small">{Object.entries(v.requester).map(([who, n]) => `${n} by ${who === "hr" ? "HR" : "a manager"}`).join(", ")}</div></td>
+                    <td className="num">{v.replayed} of {v.fixture}</td>
+                    <td>{v.expected.issue_type ? `Blocked: ${ISSUE[v.expected.issue_type] ?? v.expected.issue_type}` : "Allowed, conversation recorded"}
+                      <span className="quiet small"> ({v.expected.http})</span></td>
+                    <td className="num">{v.as_expected}</td>
                   </tr>
                 ))}
               </tbody>

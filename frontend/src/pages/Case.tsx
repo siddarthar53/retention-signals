@@ -266,8 +266,9 @@ function ManagerView({ c, reload }: { c: ManagerCase; reload: () => void }) {
       <div className="case-grid">
         <div className="case-main">
           <section className="panel">
-            <h2>What HR noticed</h2>
-            {c.themes.length === 0 && <p className="quiet">A general check-in is suggested; no single theme stands out.</p>}
+            <h2>Topics to cover</h2>
+            <p className="quiet small">Topics are listed in a fixed order, not by importance.</p>
+            {c.themes.length === 0 && <p className="quiet">A general check-in is suggested.</p>}
             {c.themes.map((t) => (
               <div key={t.theme} className="guide">
                 <h3>{t.text}</h3>
