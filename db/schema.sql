@@ -1,5 +1,5 @@
 -- =====================================================================================
--- Retention Signals — database schema v0.6
+-- Retention Signals — database schema v0.6.1
 -- PostgreSQL 15+ (tested on 16). Load into an EMPTY database:  python scripts/db_reset.py
 --
 -- v0.6 (build start, 2026-10-27):
@@ -7,8 +7,12 @@
 --    The recorded history is the untreated world; interventions carry simulated outcomes taken
 --    from evaluation-only potential outcomes (eval.potential_outcome).
 --  * Assignment closure: no effective_to column. An assignment ends where the next one for the
---    same employee starts (or at termination). core.assignment_interval derives the end date, so
---    an open interval can end without UPDATE and overlaps are impossible (one start per day).
+--    same employee starts, or at termination, whichever is earlier. An open interval therefore ends
+--    without UPDATE; for chain-validated, chronological source data, intervals cannot overlap.
+--    core.assignment_interval is a final-history view; features reconstruct as-of in code.
+--  * v0.6.1 (ChatGPT review A1-A3): label target can no longer be NULL for completed statuses;
+--    no self-referencing / multiple hire-root assignments; column-level grants hide capacity,
+--    actual hours and raw survey items from rs_app; API uses a dedicated login role.
 --  * Outcome state matrix can no longer evaluate to NULL (on_notice requires a scheduled date).
 --  * Two database roles: rs_app (API) and rs_eval (evaluation). rs_app cannot read the eval schema,
 --    attrition outcomes, sick-leave rows or compensation. Pipeline jobs run as the schema owner and
@@ -92,7 +96,7 @@ CREATE TABLE core.employee (
   hire_date    date NOT NULL,
   recorded_at  timestamptz NOT NULL
 );
-COMMENT ON TABLE core.employee IS 'Immutable identity and hire date only. No names, birth dates, gender, location or other sensitive attributes or proxies exist anywhere in the dataset.';
+COMMENT ON TABLE core.employee IS 'Immutable identity and hire date only. The dataset contains no names, birth dates, gender, ethnicity, marital status, location or nationality. Documented exception: a restricted sick-leave ledger exists at the user''s request; it is never a feature, hazard input or manager-visible value.';
 COMMENT ON COLUMN core.employee.employee_id IS 'EMP-NNNNNN, zero-padded, immutable.';
 COMMENT ON COLUMN core.employee.hire_date   IS 'First day of employment (single employment spell per person).';
 COMMENT ON COLUMN core.employee.recorded_at IS 'When the record became known to the system (availability time).';
@@ -135,21 +139,29 @@ CREATE TABLE core.assignment (
   CONSTRAINT assignment_one_start_per_day UNIQUE (employee_id, effective_from),
   CONSTRAINT assignment_chain_same_employee FOREIGN KEY (previous_assignment_id, employee_id)
     REFERENCES core.assignment(assignment_id, employee_id),
-  CONSTRAINT assignment_first_is_hire CHECK ((change_reason = 'hire') = (previous_assignment_id IS NULL))
+  CONSTRAINT assignment_first_is_hire CHECK ((change_reason = 'hire') = (previous_assignment_id IS NULL)),
+  CONSTRAINT assignment_no_self_reference CHECK (previous_assignment_id IS DISTINCT FROM assignment_id)
 );
+CREATE UNIQUE INDEX assignment_one_hire_root ON core.assignment (employee_id) WHERE change_reason = 'hire';
 COMMENT ON TABLE core.assignment IS 'Employee-team-role history (the N:M bridge). Each row starts an interval; the interval ends where the next row for the employee starts, or at termination (see core.assignment_interval).';
 COMMENT ON COLUMN core.assignment.assignment_id          IS 'ASGN-YYYY-NNNNNN, YYYY = effective_from year.';
 COMMENT ON COLUMN core.assignment.effective_from         IS 'First day of this team/role assignment.';
 COMMENT ON COLUMN core.assignment.change_reason          IS 'hire | transfer (team change) | promotion (level up) | lateral_move (role change, same level) | reorg.';
 COMMENT ON COLUMN core.assignment.previous_assignment_id IS 'The assignment this one replaces (same employee). NULL only for the hire assignment.';
 
+-- Reconstruction contract (agreed with ChatGPT review, G1 step 1):
+--  * This view is FINAL-HISTORY ONLY (what is known today). It must never feed features.
+--  * As-of reconstruction (pipeline/features.py) first filters assignments and exits to
+--    recorded_at <= cutoff AND effective/event date <= as_of, THEN derives interval ends.
+--  * Chain validity (immediate earlier predecessor, one hire root, no cycles, assignment within
+--    employment and after team creation, nothing after exit) is checked by the validator.
 CREATE VIEW core.assignment_interval AS
 SELECT a.*,
-       COALESCE(LEAD(a.effective_from) OVER (PARTITION BY a.employee_id ORDER BY a.effective_from),
-                (SELECT e.event_date + 1 FROM core.employment_event e
-                  WHERE e.employee_id = a.employee_id AND e.event_type = 'exit')) AS effective_to
+       LEAST(LEAD(a.effective_from) OVER (PARTITION BY a.employee_id ORDER BY a.effective_from),
+             (SELECT e.event_date + 1 FROM core.employment_event e
+               WHERE e.employee_id = a.employee_id AND e.event_type = 'exit')) AS effective_to
 FROM core.assignment a;
-COMMENT ON VIEW core.assignment_interval IS 'Assignments with derived exclusive end date: next assignment start, or day after termination, or NULL if current.';
+COMMENT ON VIEW core.assignment_interval IS 'FINAL-HISTORY view: assignments with derived exclusive end = earlier of next assignment start and day after termination; NULL if current. Not as-of safe; never used for features.';
 
 CREATE TABLE core.promotion_history (
   promotion_id   text PRIMARY KEY CONSTRAINT promotion_id_format CHECK (promotion_id ~ '^PROMO-\d{4}-\d{6}$'),
@@ -461,11 +473,11 @@ CREATE TABLE eval.horizon_label (
   CONSTRAINT label_horizon_two_quarters CHECK (horizon_end = core.quarter_end((as_of_date + interval '6 months')::date)),
   CONSTRAINT label_on_quarter_end       CHECK (as_of_date = core.quarter_end(as_of_date)),
   CONSTRAINT label_ineligible_reason    CHECK ((label_status = 'ineligible') = (ineligible_reason IS NOT NULL)),
-  CONSTRAINT label_target_rule          CHECK (CASE label_status
+  CONSTRAINT label_target_rule          CHECK (COALESCE(CASE label_status
                                                  WHEN 'voluntary_exit' THEN target = 1
                                                  WHEN 'employed_through_horizon' THEN target = 0
                                                  WHEN 'competing_exit' THEN target = 0
-                                                 ELSE target IS NULL END)
+                                                 ELSE target IS NULL END, false))
 );
 COMMENT ON TABLE eval.horizon_label IS 'Target per employee and quarter-end: voluntary termination on or before the second following quarter-end. Evaluation-only.';
 COMMENT ON COLUMN eval.horizon_label.label_status IS 'voluntary_exit (1) | employed_through_horizon (0, incl. resigned after as_of but still serving notice) | competing_exit (0, involuntary) | unresolved (horizon beyond observation; excluded) | ineligible (excluded).';
@@ -517,10 +529,18 @@ END $$;
 
 REVOKE ALL ON SCHEMA core, app, eval FROM PUBLIC;
 
+-- The API connects as a separate LOGIN role that is a member of rs_app (created by scripts/db_reset.py
+-- with a password from the environment), never as the owner/superuser.
 GRANT USAGE ON SCHEMA core, app TO rs_app;
 GRANT SELECT ON core.role, core.team, core.employee, core.employment_event, core.assignment,
                 core.assignment_interval, core.promotion_history, core.tenure_snapshot,
-                core.workload_snapshot, core.earned_leave_ledger, core.engagement_survey TO rs_app;
+                core.earned_leave_ledger TO rs_app;
+-- Column-level grants: no capacity/actual-hours pair (could reveal sick leave), no raw survey items.
+GRANT SELECT (workload_id, employee_id, period_month, utilization_pct, after_hours_pct, oncall_days, recorded_at)
+  ON core.workload_snapshot TO rs_app;
+GRANT SELECT (survey_id, employee_id, wave, sent_date, response_status, items_answered, engagement_index,
+              submitted_at, recorded_at)
+  ON core.engagement_survey TO rs_app;
 GRANT SELECT ON ALL TABLES IN SCHEMA app TO rs_app;
 GRANT INSERT ON app.review_decision, app.intervention, app.intervention_event,
                 app.exception_log, app.user_session TO rs_app;
