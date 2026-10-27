@@ -324,6 +324,7 @@ Monthly workload per employee. actual_hours = intensity x available capacity, so
 - `workload_snapshot_scheduled_workdays_check`: `CHECK (((scheduled_workdays >= 0) AND (scheduled_workdays <= 23)))`
 - `workload_snapshot_utilization_pct_check`: `CHECK (((utilization_pct >= (0)::numeric) AND (utilization_pct <= (250)::numeric)))`
 - `workload_utilization_arith`: `CHECK ( CASE     WHEN (utilization_pct IS NULL) THEN true     WHEN (available_hours = (0)::numeric) THEN false     ELSE (abs((utilization_pct - round(((actual_hours * (100)::numeric) / available_hours), 1))) <= 0.05) END)`
+- `workload_zero_capacity_hours`: `CHECK (((available_hours <> (0)::numeric) OR (actual_hours = (0)::numeric)))`
 - `workload_zero_capacity_rule`: `CHECK (((available_hours = (0)::numeric) = (utilization_pct IS NULL)))`
 - `workload_snapshot_employee_id_period_month_key`: `UNIQUE (employee_id, period_month)`
 

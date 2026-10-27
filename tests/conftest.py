@@ -19,9 +19,10 @@ from dbutil import load_schema, recreate_database  # noqa: E402
 TEST_DB = "retention_test"
 
 BASE_ROWS = """
-INSERT INTO core.compensation_band VALUES ('BAND-03',3,'SYN',54000,65000,76000);
+INSERT INTO core.compensation_band VALUES ('BAND-03',3,'SYN',54000,65000,76000),
+                                          ('BAND-04',4,'SYN',72000,86000,100000);
 INSERT INTO core.role VALUES ('ROLE-0001','Engineering IC L3','engineering',3,'BAND-03',false),
-                             ('ROLE-0002','Engineering Manager L3x','engineering',3,'BAND-03',true);
+                             ('ROLE-0002','Engineering Manager L4','engineering',4,'BAND-04',true);
 INSERT INTO core.team VALUES ('TEAM-0001','Engineering 001','engineering','2015-01-01'),
                              ('TEAM-0002','Engineering 002','engineering','2015-01-01');
 INSERT INTO core.employee VALUES ('EMP-000001','2022-03-14','2022-03-14 09:00+00'),

@@ -4,7 +4,8 @@ Every table, view and column in schemas core/app/eval is listed with type, nulla
 check expressions and its description (COMMENT). Exits non-zero if any table, view or column has
 no description, so the dictionary cannot silently fall behind the schema.
 
-Usage:  python scripts/gen_dictionary.py [--check]   (--check: verify only, do not write)
+Usage:  python scripts/gen_dictionary.py [--check]
+  --check: write nothing; fail if any description is missing OR the committed markdown is stale.
 Loads db/schema.sql into a scratch database (retention_dict) first.
 """
 from __future__ import annotations
@@ -112,11 +113,17 @@ def main() -> int:
         for m in missing:
             print("  -", m)
         return 1
-    if not check_only:
-        OUT.write_text("\n".join(out) + "\n", encoding="utf-8")
-        print(f"Wrote {OUT.relative_to(ROOT)}: {len(rels)} tables/views, full column coverage.")
-    else:
-        print(f"Dictionary coverage OK: {len(rels)} tables/views, every column described.")
+    rendered = "\n".join(out) + "\n"
+    if check_only:
+        committed = OUT.read_text(encoding="utf-8") if OUT.exists() else ""
+        if committed.replace("\r\n", "\n") != rendered:
+            print(f"Dictionary is STALE: {OUT.relative_to(ROOT)} differs from the schema. "
+                  "Run: python scripts/gen_dictionary.py")
+            return 1
+        print(f"Dictionary OK: {len(rels)} tables/views, every column described, committed file up to date.")
+        return 0
+    OUT.write_text(rendered, encoding="utf-8", newline="\n")
+    print(f"Wrote {OUT.relative_to(ROOT)}: {len(rels)} tables/views, full column coverage.")
     return 0
 
 

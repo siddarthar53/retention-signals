@@ -36,8 +36,18 @@ def url_for_database(url: str, dbname: str) -> str:
     return make_conninfo(**params)
 
 
+# The only databases any script may DROP and recreate. Anything else is refused before connecting.
+RESETTABLE_DATABASES = frozenset({"retention", "retention_test", "retention_dict"})
+
+
 def recreate_database(dbname: str) -> str:
-    """Drop and create an empty database; return a connection URL for it."""
+    """DELETE and recreate one of the project's own databases; return a connection URL for it.
+
+    Refuses (before opening any connection) unless dbname is in RESETTABLE_DATABASES.
+    """
+    if dbname not in RESETTABLE_DATABASES:
+        raise SystemExit(f"Refusing to drop database {dbname!r}: only {sorted(RESETTABLE_DATABASES)} "
+                         "may be reset by these scripts.")
     base = admin_url()
     with psycopg.connect(base, autocommit=True) as conn:
         conn.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(dbname)))

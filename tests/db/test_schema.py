@@ -152,6 +152,11 @@ def test_workload_zero_capacity_requires_null_utilization(conn):
     err = expect_violation(conn, workload("WLS-EMP-000001-2025-05", "2025-05-01", 0, 0, 0, 0.0), None, CHECK)
     assert err.diag.constraint_name in {"workload_zero_capacity_rule", "workload_utilization_arith"}
 
+def test_workload_zero_capacity_positive_hours(conn):
+    """No capacity (e.g. a full-leave month) cannot record worked hours."""
+    expect_violation(conn, workload("WLS-EMP-000001-2025-05", "2025-05-01", 0, 0, 100, None),
+                     "workload_zero_capacity_hours", CHECK)
+
 def test_workload_zero_capacity_null_utilization_ok(conn):
     expect_ok(conn, workload("WLS-EMP-000001-2025-05", "2025-05-01", 0, 0, 0, None))
 

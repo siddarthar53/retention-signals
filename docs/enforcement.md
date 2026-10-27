@@ -21,6 +21,9 @@ that gate and must ship with a failing fixture.
 | Promotion date = started assignment's start date; level increases | Validator | planned (G2) |
 | Leave balance >= 0 at every transaction; 0 after each 31 Dec lapse; no zero-day lapse rows; only the 31 Dec close after termination | Validator | planned (G2) |
 | No workload / survey / leave-taken rows after termination | Validator | planned (G2) |
+| Outcome vs events: final_status, resignation/termination/scheduled dates match employment_event rows | Validator | planned (G2) |
+| Labels vs outcome: each label status/target matches the outcome dates and the horizon (incl. LABEL_DATE_MISMATCH detection) | Validator | planned (G2) |
+| Pre-window careers feasible: promotions spaced >= 1.5 years, between hire and 2024-12-31, level increases by 1 | Validator | planned (G2) |
 | Totals: exact employee count; realised hire mix reported; attrition within 5-15% | Validator | planned (G2) |
 | As-of reconstruction: filter by recorded_at <= cutoff and date <= as_of BEFORE deriving intervals | Pipeline code | planned (G4) |
 | Features never use eval, SL, compensation, team or manager IDs, or missingness as a risk term | Pipeline code (allowlist) | planned (G4) |

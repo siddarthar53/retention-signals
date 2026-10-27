@@ -222,6 +222,7 @@ CREATE TABLE core.workload_snapshot (
   CONSTRAINT workload_id_matches_month    CHECK (substr(workload_id, 16, 7) = to_char(period_month, 'YYYY-MM')),
   CONSTRAINT workload_capacity_bound      CHECK (available_hours <= scheduled_workdays * 8),
   CONSTRAINT workload_zero_capacity_rule  CHECK ((available_hours = 0) = (utilization_pct IS NULL)),
+  CONSTRAINT workload_zero_capacity_hours CHECK (available_hours <> 0 OR actual_hours = 0),
   CONSTRAINT workload_utilization_arith   CHECK (CASE WHEN utilization_pct IS NULL THEN true
                                                      WHEN available_hours = 0 THEN false
                                                      ELSE abs(utilization_pct - round(actual_hours * 100 / available_hours, 1)) <= 0.05 END)

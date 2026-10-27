@@ -1,7 +1,8 @@
-"""Drop and recreate the application database, then load db/schema.sql.
+"""DELETES and recreates the application database "retention", then loads db/schema.sql.
 
-Usage:  python scripts/db_reset.py            (database name from DATABASE_NAME, default "retention")
+Usage:  python scripts/db_reset.py
 Reads DATABASE_ADMIN_URL and RS_APP_PASSWORD from the environment or .env. Prints no secrets.
+Only the database named "retention" can be reset; DATABASE_NAME, if set, must equal it.
 """
 from __future__ import annotations
 
@@ -18,6 +19,12 @@ from dbutil import ensure_app_login, load_env, load_schema, recreate_database  #
 def main() -> None:
     load_env()
     dbname = os.environ.get("DATABASE_NAME", "retention")
+    if dbname != "retention":
+        raise SystemExit(f"Refusing to reset {dbname!r}: this script only resets the 'retention' database.")
+    if not os.environ.get("DATABASE_ADMIN_URL"):
+        raise SystemExit("DATABASE_ADMIN_URL is not set. Copy .env.example to .env and fill it in.")
+    if not os.environ.get("RS_APP_PASSWORD"):
+        raise SystemExit("RS_APP_PASSWORD is not set; the API login role needs it. Set it in .env.")
     url = recreate_database(dbname)
     load_schema(url)
     with psycopg.connect(url) as conn:

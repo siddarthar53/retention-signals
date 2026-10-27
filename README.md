@@ -9,14 +9,16 @@ employment decisions. All data is synthetic: no real people, names or sensitive 
 
 ## Requirements (Windows or Linux)
 
-- PostgreSQL 16 (local service), Python 3.12+ (tested on 3.13 and 3.14), Node 20+ (UI, later gates)
+- PostgreSQL 16 (local service), Python 3.12+, Node 20+ (UI, later gates)
+- Reported test runs so far: Linux, PostgreSQL 16.15, Python 3.13.17 (`requirements.lock`). The target
+  Windows machine (Python 3.14.7, PostgreSQL 16.15) has not run the suite yet.
 
 ## Setup
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\activate            # Linux/macOS: source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.lock        # exact tested versions (requirements.txt = ranges)
 copy .env.example .env            # then edit .env: DATABASE_ADMIN_URL, RS_APP_PASSWORD
 ```
 
@@ -24,9 +26,10 @@ copy .env.example .env            # then edit .env: DATABASE_ADMIN_URL, RS_APP_P
 
 | What | Command |
 |---|---|
-| Create database `retention` and load the schema | `python scripts/db_reset.py` |
+| **DELETES** and recreates database `retention`, loads the schema, creates API login | `python scripts/db_reset.py` |
 | Run all tests (creates/drops its own `retention_test` database) | `python -m pytest` |
 | Regenerate the data dictionary (fails if any column is undocumented) | `python scripts/gen_dictionary.py` |
+| Check the committed dictionary is complete and up to date | `python scripts/gen_dictionary.py --check` |
 
 ## Layout
 

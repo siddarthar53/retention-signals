@@ -1,4 +1,4 @@
-# Master data specification — v0.2 (ChatGPT review B1-B5 applied; pending ChatGPT acceptance)
+# Master data specification — v0.3 (ChatGPT reviews applied: B1-B5, C3 feasibility)
 # Everything here is synthetic. No external datasets, names or real organisations.
 # Counts marked "scales" derive from scale.employees; the rest are fixed.
 #
@@ -11,10 +11,15 @@
 #     allocation with ties broken by the fixed order of the lists below. Team count is computed as
 #     round(initial / team_size_target) and is the single source of truth; count_full_scale is a
 #     cross-check only. Managers (1 per team) are allocated inside each family's headcount.
-#  C3 Team history vs hire dates: each team's created_date = min(configured draw, earliest
-#     assignment start of any member). Pre-window careers are generated: hire assignment at an
-#     entry level on hire_date, then promotions at seeded intervals up to the 2025-01-01 role, all
-#     within the same team. Hire dates are never clamped.
+#  C3 Feasible pre-window careers (amended after ChatGPT review): the 2025-01-01 role (level) and
+#     tenure are sampled first. The number of pre-window promotions is
+#        k = min(level_gap_available, floor(tenure_years / promotion_interval.min_years)),
+#     drawn from a seeded distribution within that cap, and the person was hired k levels below the
+#     current role (external hires may therefore join at any level, including as a manager). For
+#     managers, the last promotion (if any) is the IC-to-manager step. Promotion dates are spaced at
+#     >= min_years and fall between hire_date and 2024-12-31. k = 0 means "never promoted" and
+#     months_since_promotion stays NULL. Nothing is clamped: if no promotion fits, k = 0.
+#     Team history: each team's created_date = min(configured draw, earliest member assignment start).
 #  C4 Survey shares: response_rate includes partial responses; partial_rate is conditional on
 #     responding. => 76% complete, 4% partial, 20% no response.
 #  C5 Leave accounting:
@@ -28,7 +33,7 @@
 #       Exited employees' remaining balance also lapses at the Dec 31 close of the exit year. This
 #       accounting entry is the only row allowed after termination.
 
-version: 0.2
+version: 0.3
 seed: 20261022
 
 scale:
@@ -95,9 +100,13 @@ in_window_hires:             # exact count = employees - initial (C1)
   target_share_growth: 0.3    # spread evenly across the 24 months; absorbs any unmet backfill quota
   backfill_delay_months: [1, 3]
 
-pre_window_career:            # C3
-  entry_level_ic: 1
-  promotion_interval_years: {mean: 3.0, min: 1.5}
+pre_window_career:            # C3 (feasibility-capped; external hires may enter above L1)
+  promotion_interval_years: {mean: 3.0, min_years: 1.5}
+  promotion_count_prob:       # P(k) before applying the feasibility cap
+    0: 0.35
+    1: 0.35
+    2: 0.20
+    3: 0.10
 
 notice_days_by_level: {1: 30, 2: 30, 3: 60, 4: 60, 5: 90, 6: 90}   # synthetic policy, not a legal claim
 
