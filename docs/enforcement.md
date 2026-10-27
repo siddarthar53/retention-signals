@@ -17,18 +17,18 @@ that gate and must ship with a failing fixture.
 | One hire assignment per employee; no self-referencing predecessor; one start per day | DB (UNIQUE / CHECK) | DB |
 | History tables are append-only (no UPDATE / DELETE / TRUNCATE) | DB (trigger) | DB |
 | API role cannot read eval, outcomes, sick leave, pay, capacity/actual hours, raw survey items | DB (grants) | DB |
-| Assignment chain: predecessor is the immediately earlier assignment; no cycles; within employment; after team creation; nothing after exit | Validator | planned (G2) |
-| Promotion date = started assignment's start date; level increases | Validator | planned (G2) |
-| Leave balance >= 0 at every transaction; 0 after each 31 Dec lapse; no zero-day lapse rows; only the 31 Dec close after termination | Validator | planned (G2) |
-| No workload / survey / leave-taken rows after termination | Validator | planned (G2) |
-| Outcome vs events: final_status, resignation/termination/scheduled dates match employment_event rows | Validator | planned (G2) |
-| Labels vs outcome: each label status/target matches the outcome dates and the horizon (incl. LABEL_DATE_MISMATCH detection) | Validator | planned (G2) |
-| Pre-window careers feasible: promotions spaced >= 1.5 years, between hire and 2024-12-31, level increases by 1 | Validator | planned (G2) |
-| Totals: exact employee count; realised hire mix reported; attrition within 5-15% | Validator | planned (G2) |
+| Assignment chain: predecessor is the immediately earlier assignment; no cycles; within employment; after team creation; nothing after exit | Validator | done (G2): `generator/validate.py` |
+| Promotion date = started assignment's start date; level increases | Validator | done (G2): `generator/validate.py` |
+| Leave balance >= 0 at every transaction; 0 after each 31 Dec lapse; no zero-day lapse rows; only the 31 Dec close after termination | Validator | done (G2): `generator/validate.py` |
+| No workload / survey / leave-taken rows after termination | Validator | done (G2): `generator/validate.py` |
+| Outcome vs events: final_status, resignation/termination/scheduled dates match employment_event rows | Validator | done (G2): `generator/validate.py` |
+| Labels vs outcome: each label status/target matches the outcome dates and the horizon (incl. LABEL_DATE_MISMATCH detection) | Validator | done (G2): `generator/validate.py` |
+| Pre-window careers feasible: promotions spaced >= 1.5 years, between hire and 2024-12-31, level increases by 1 | Validator | done (G2): `generator/validate.py` |
+| Totals: exact employee count; realised hire mix reported; attrition within 5-15% | Validator | done (G2): `generator/validate.py` |
 | As-of reconstruction: filter by recorded_at <= cutoff and date <= as_of BEFORE deriving intervals | Pipeline code | planned (G4) |
 | Features never use eval, SL, compensation, team or manager IDs, or missingness as a risk term | Pipeline code (allowlist) | planned (G4) |
 | Trainer reads only train/validation labels; test labels only in the evaluator | Pipeline code | planned (G4) |
-| Sick leave cannot be recovered from model inputs (paired-record invariance) | Generator + test | planned (G2) |
+| Sick leave cannot be recovered from model inputs (paired-record invariance) | Generator + test | done (G2): `tests/generator/test_history.py` |
 | Review gate: approved review, same employee and score version, team scope, eligibility, chronology, arm, no conflicting intervention | API service (one transaction) | planned (G5) |
 | Actor identity from the session only; 403 for other teams' cases; 409 for workflow conflicts | API service | planned (G5) |
 | Manager responses exclude raw survey items, capacity/actual hours and restricted values | API serializers + tests | planned (G5) |

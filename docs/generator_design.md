@@ -1,4 +1,4 @@
-# Generator design v0.2 (for agreement before coding)
+# Generator design v0.2 (implemented on `g2-design`; v0.2.1 note below)
 
 Implements `config/master_data.yaml` v0.3 (contracts C1-C5) against `db/schema.sql` v0.6.2.
 v0.2 applies ChatGPT's review of v0.1 (outcome definition, join contract, SL quantisation, in-month
@@ -141,6 +141,17 @@ December with termination in February (leave accrual, Jan 1 SL grant and Dec 31 
 boundary); June workload recorded in July excluded at June 30; June survey recorded June 24
 included; leave capped so capacity never reaches zero; paired SL records with identical allowed
 features (persisted and reloaded from PostgreSQL), including low-capacity months.
+
+## 8a. v0.2.1 implementation notes (pending ChatGPT review)
+- **Latent burn-in:** the latent dynamics run for 12 months before 2025 (no rows), because starting
+  engagement away from its steady state produced an artificial drop in early 2025 that the hazard read as
+  "engagement decline" (first-quarter positive rate 4.0% vs 1.3-1.5% later). With burn-in the six
+  resolved quarters sit at 1.8-2.5%. b0 was recalibrated on the dev seeds after this change.
+- **Code order inside a month** differs from the table in section 4 (hazards before career events and
+  rows), with identical causal inputs: everything uses the state fixed on the 1st. This lets rows stop
+  exactly at termination and prevents career events after an exit. See `generator/history.py` docstring.
+- **Exit-to-backfill:** manager exits create vacancies (internal fill or external manager hire);
+  other exits create backfills while the 70% target lasts; the rest of the exact hire total is growth.
 
 ## 9. Outputs
 `data/out/<scale>/canonical/*.csv|json`, `seed.sql` (COPY format), `fixtures/`,

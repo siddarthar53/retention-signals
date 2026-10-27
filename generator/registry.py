@@ -87,6 +87,50 @@ class EmploymentEvent:
     id: str = ""
 
 
+@dataclass(eq=False)
+class LeaveTxn:
+    employee: Employee
+    leave_type: str
+    txn_type: str
+    days: int
+    txn_date: dt.date
+    recorded_at: str
+    seq: int = 0          # order within a day: credits 0, taken 1, lapse 2
+    id: str = ""
+
+
+@dataclass(eq=False)
+class Workload:
+    employee: Employee
+    period_month: dt.date
+    scheduled_workdays: int
+    available_hours: int
+    actual_hours: str        # exact decimal text, 3 places
+    utilization_pct: str | None
+    after_hours_pct: str
+    oncall_days: int
+    recorded_at: str
+    leave_days: int = 0      # generation-only (used by tests), not exported
+    sl_days: int = 0         # generation-only
+
+    @property
+    def id(self) -> str:
+        return f"WLS-{self.employee.id}-{self.period_month:%Y-%m}"
+
+
+@dataclass(eq=False)
+class Survey:
+    employee: Employee
+    wave: str
+    sent_date: dt.date
+    response_status: str
+    items: tuple
+    engagement_index: str | None
+    submitted_at: str | None
+    recorded_at: str
+    id: str = ""
+
+
 class Registry:
     def __init__(self):
         self.bands: list[Band] = []
@@ -96,6 +140,9 @@ class Registry:
         self.assignments: list[Assignment] = []
         self.promotions: list[Promotion] = []
         self.events: list[EmploymentEvent] = []
+        self.leave: list[LeaveTxn] = []
+        self.workload: list[Workload] = []
+        self.surveys: list[Survey] = []
         self._role_index: dict[tuple, Role] = {}
 
     # ---- creation helpers: children always receive parent objects ----
@@ -152,6 +199,8 @@ class Registry:
         _per_year(self.assignments, "ASGN", 6, lambda a: (a.effective_from, a.employee.id))
         _per_year(self.promotions, "PROMO", 6, lambda p: (p.effective_date, p.employee.id))
         _per_year(self.events, "EEV", 6, lambda e: (e.event_date, e.employee.id, e.event_type))
+        _per_year(self.leave, "LVT", 7, lambda t: (t.txn_date, t.employee.id, t.seq, t.leave_type, t.txn_type))
+        _per_year(self.surveys, "SURV", 6, lambda s: (s.sent_date, s.employee.id))
 
 
 def _per_year(items, prefix: str, width: int, key) -> None:

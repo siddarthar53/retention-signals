@@ -1,0 +1,78 @@
+# Generator dynamics (design v0.2). Synthetic assumptions, documented and frozen.
+# b0 values are produced by `python -m generator.calibrate` on development seeds (never the main
+# seed, never test-period outcomes) and then fixed here with their provenance.
+
+version: 0.2
+
+latent:
+  burn_in_months: 12             # latent dynamics run Jan-Dec 2024 (no rows) so 2025 starts at steady state
+  intensity:                     # monthly work intensity; utilisation = intensity x 100
+    person_mean: 1.00
+    person_sd: 0.07
+    ar: 0.60                     # persistence towards the person's own level
+    noise_sd: 0.04
+    team_shock_sd: 0.03          # shared by a team in a month
+    benign_spike: {prob_per_month: 0.04, months: [1, 2], lift: 0.22}
+    sustained_overload: {prob_per_month: 0.012, months: [4, 8], lift: 0.25}
+    clip: [0.50, 1.80]
+  engagement:                    # latent 1-5 scale
+    person_mean: 3.70
+    person_sd: 0.45
+    adjust_rate: 0.30            # monthly move towards target
+    noise_sd: 0.08
+    sustained_overload_drag: 0.55
+    promotion_clock_drag_per_month: 0.015   # per month beyond 24 months without promotion
+    manager_quality_weight: 0.20
+    fresh_start_bump: 0.30       # for 6 months after a promotion or transfer
+  external_pull: {sd: 1.0}       # latent, never exported
+  manager_quality: {sd: 1.0}     # latent, redrawn on team change, never exported
+
+careers:
+  promotion_prob_per_month: {eligible_after_months_in_role: 18, after: 0.012, before: 0.002}
+  transfer_prob_per_month: 0.004       # individual contributors; same family, same role
+  vacancy_fill_delay_months: [1, 3]
+  vacancy_internal_share: 0.6          # otherwise external manager hire (counts as a backfill hire)
+
+hazard:
+  voluntary:                     # monthly logit
+    b0: -7.1403                 # calibrated, see provenance
+    engagement_gap: 0.90         # x (3.6 - engagement)
+    engagement_decline: 1.50     # x max(0, engagement 6 months ago - now)
+    sustained_overload: 0.60     # in a sustained-overload episode for >= 3 months
+    benign_spike: 0.0            # benign spikes carry no risk
+    promotion_clock: 0.025       # x max(0, months since promotion or hire - 24)
+    new_joiner: 0.40             # tenure < 12 months
+    recent_transfer: -0.50       # transfer in the last 6 months
+    external_pull: 0.60          # latent
+    manager_quality: -0.40       # latent
+  involuntary_prob_per_month: 0.0009
+
+leave_use:
+  el_block_prob_per_month: 0.18
+  el_block_days: [1, 5]
+  el_december_prob: 0.55         # leave taken before the 31 Dec lapse
+  el_notice_burn: true           # remaining EL used in the last month of notice
+  sl_prob_per_month: 0.06
+  sl_days: [1, 2]
+
+survey:
+  intensity_nonresponse_slope: 0.60    # P(respond) = clip(0.80 - slope x (intensity - 1), 0.5, 0.95)
+  item_noise_sd: 0.50
+
+recording_lag_days:
+  workload_after_month_end: [3, 7]
+  survey_after_submission: [0, 2]
+  survey_submission_after_send: [0, 7]
+
+treatment:
+  prevention_prob: 0.30          # P(a voluntary termination within the horizon is prevented | treated)
+
+injection:
+  rate: 0.01
+  min_cases_per_type: 5
+
+calibration:
+  target_voluntary_termination_rate: 0.10   # voluntary terminations 2025-2026 / N
+  dev_seeds: [101, 202, 303]
+  dev_scale: 3000
+  provenance: "b0=-7.1403 gives 0.1024 on dev seeds [101, 202, 303] at scale 3000 (target 0.1); bisection on [-9, -4], 12 steps; 2026-10-27"
