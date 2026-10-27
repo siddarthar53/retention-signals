@@ -222,8 +222,9 @@ CREATE TABLE core.workload_snapshot (
   CONSTRAINT workload_id_matches_month    CHECK (substr(workload_id, 16, 7) = to_char(period_month, 'YYYY-MM')),
   CONSTRAINT workload_capacity_bound      CHECK (available_hours <= scheduled_workdays * 8),
   CONSTRAINT workload_zero_capacity_rule  CHECK ((available_hours = 0) = (utilization_pct IS NULL)),
-  CONSTRAINT workload_utilization_arith   CHECK (utilization_pct IS NULL OR
-              abs(utilization_pct - round(actual_hours * 100 / available_hours, 1)) <= 0.05)
+  CONSTRAINT workload_utilization_arith   CHECK (CASE WHEN utilization_pct IS NULL THEN true
+                                                     WHEN available_hours = 0 THEN false
+                                                     ELSE abs(utilization_pct - round(actual_hours * 100 / available_hours, 1)) <= 0.05 END)
 );
 COMMENT ON TABLE core.workload_snapshot IS 'Monthly workload per employee. actual_hours = intensity x available capacity, so leave lowers both hours and capacity and does not change utilisation.';
 COMMENT ON COLUMN core.workload_snapshot.workload_id        IS 'WLS-<employee-id>-YYYY-MM.';
@@ -247,7 +248,7 @@ CREATE TABLE core.leave_ledger (
   CONSTRAINT leave_sign_rule     CHECK ((txn_type IN ('taken','lapse')) = (days < 0)),
   CONSTRAINT leave_accrual_rule  CHECK (txn_type <> 'accrual' OR (leave_type = 'EL' AND days = 1)),
   CONSTRAINT leave_grant_rule    CHECK (txn_type <> 'grant'   OR (leave_type = 'SL' AND days = 3)),
-  CONSTRAINT leave_lapse_dec31   CHECK (txn_type <> 'lapse'   OR to_char(txn_date, 'MM-DD') = '12-31'),
+  CONSTRAINT leave_lapse_dec31   CHECK (txn_type <> 'lapse'   OR (extract(month FROM txn_date) = 12 AND extract(day FROM txn_date) = 31)),
   CONSTRAINT leave_year_matches  CHECK (leave_year = extract(year FROM txn_date)),
   CONSTRAINT leave_not_backdated CHECK (recorded_at::date >= txn_date)
 );
@@ -286,9 +287,11 @@ CREATE TABLE core.engagement_survey (
                                             WHEN 'partial'  THEN items_answered BETWEEN 1 AND 4
                                             ELSE items_answered = 0 END),
   CONSTRAINT survey_index_presence CHECK ((items_answered >= 3) = (engagement_index IS NOT NULL)),
-  CONSTRAINT survey_index_mean     CHECK (engagement_index IS NULL OR engagement_index =
+  CONSTRAINT survey_index_mean     CHECK (CASE WHEN engagement_index IS NULL THEN true
+                                               WHEN items_answered = 0 THEN false
+                                               ELSE engagement_index =
                                             round((coalesce(q1,0)+coalesce(q2,0)+coalesce(q3,0)+coalesce(q4,0)+coalesce(q5,0))::numeric
-                                                  / items_answered, 2)),
+                                                  / items_answered, 2) END),
   CONSTRAINT survey_submit_rule    CHECK ((response_status = 'no_response') = (submitted_at IS NULL)),
   CONSTRAINT survey_chronology     CHECK (submitted_at IS NULL OR (submitted_at::date >= sent_date AND recorded_at >= submitted_at))
 );
@@ -502,6 +505,128 @@ CREATE TABLE eval.ground_truth (
   rule_version       text NOT NULL
 );
 COMMENT ON TABLE eval.ground_truth IS 'Answer key for injected anomalies and clean controls (is_control = true, expected_detection = none). Never used as a feature.';
+
+-- =====================================================================================
+-- COLUMN DESCRIPTIONS (data dictionary source; scripts/gen_dictionary.py fails on any gap)
+-- =====================================================================================
+COMMENT ON COLUMN core.attrition_outcome.resignation_date IS 'Date the resignation was submitted (voluntary exits and on_notice only).';
+COMMENT ON COLUMN core.engagement_survey.sent_date        IS 'Date the survey wave was sent (15th of the quarter''s last month).';
+COMMENT ON COLUMN core.engagement_survey.submitted_at     IS 'When the employee submitted answers; NULL for no_response.';
+COMMENT ON COLUMN core.promotion_history.from_role_id     IS 'Role held before the promotion.';
+COMMENT ON COLUMN core.promotion_history.to_role_id       IS 'Role held after the promotion (higher level).';
+COMMENT ON COLUMN core.assignment.team_id                 IS 'Team for this interval.';
+COMMENT ON COLUMN core.assignment.role_id                 IS 'Role for this interval.';
+
+COMMENT ON COLUMN app.app_user.user_id      IS 'USR-NNNN.';
+COMMENT ON COLUMN app.app_user.username     IS 'Login name, unique.';
+COMMENT ON COLUMN app.app_user.display_name IS 'Name shown in the UI (persona, e.g. "HR Partner 01").';
+COMMENT ON COLUMN app.app_user.app_role     IS 'manager | hr_partner | it_ops | admin.';
+COMMENT ON COLUMN app.app_user.employee_id  IS 'Employee record of a manager user (required for managers; scope = team of their current assignment).';
+COMMENT ON COLUMN app.app_user.is_active    IS 'Inactive users cannot log in.';
+
+COMMENT ON COLUMN app.user_credential.user_id       IS 'User the credential belongs to.';
+COMMENT ON COLUMN app.user_credential.password_hash IS 'argon2 hash (starts with $argon2). Plain passwords are never stored.';
+COMMENT ON COLUMN app.user_credential.updated_at    IS 'When the password was last set.';
+
+COMMENT ON COLUMN app.user_session.session_id IS 'SHA-256 hex of the session cookie token.';
+COMMENT ON COLUMN app.user_session.user_id    IS 'Logged-in user.';
+COMMENT ON COLUMN app.user_session.created_at IS 'Login time.';
+COMMENT ON COLUMN app.user_session.expires_at IS 'Session expiry (fixed lifetime).';
+COMMENT ON COLUMN app.user_session.revoked_at IS 'Logout time; NULL while active.';
+
+COMMENT ON COLUMN app.score_run.score_run_id    IS 'RUN-YYYY-NNNN.';
+COMMENT ON COLUMN app.score_run.as_of_date      IS 'Quarter-end the run scores (inputs recorded on or before this date only).';
+COMMENT ON COLUMN app.score_run.scorer_type     IS 'scorecard (points rules) | logistic_regression.';
+COMMENT ON COLUMN app.score_run.model_version   IS 'Version label of the frozen scorer.';
+COMMENT ON COLUMN app.score_run.config_hash     IS 'SHA-256 of the scorer configuration and coefficients.';
+COMMENT ON COLUMN app.score_run.model_frozen_at IS 'When the scorer was frozen (after validation labels became available).';
+COMMENT ON COLUMN app.score_run.executed_at     IS 'When the run executed (>= model_frozen_at).';
+
+COMMENT ON COLUMN app.score.score_id      IS 'SCR-YYYY-NNNNNNN.';
+COMMENT ON COLUMN app.score.score_run_id  IS 'Run that produced the score (fixes the score version).';
+COMMENT ON COLUMN app.score.risk_score    IS 'Estimated probability of voluntary exit by the horizon end, 0-1.';
+COMMENT ON COLUMN app.score.rank_in_run   IS '1 = highest score in the run.';
+COMMENT ON COLUMN app.score.priority_band IS 'suggested_checkin | monitor | none (thresholds versioned in config).';
+
+COMMENT ON COLUMN app.review_decision.review_id        IS 'REV-YYYY-NNNNNN.';
+COMMENT ON COLUMN app.review_decision.score_id         IS 'Score (and therefore score version) being reviewed.';
+COMMENT ON COLUMN app.review_decision.reviewer_user_id IS 'HR partner who decided (taken from the session, never the request body).';
+COMMENT ON COLUMN app.review_decision.decision         IS 'approved | dismissed | needs_info.';
+COMMENT ON COLUMN app.review_decision.reason_code      IS 'Coded reason for the decision.';
+COMMENT ON COLUMN app.review_decision.comment          IS 'Optional free-text note.';
+COMMENT ON COLUMN app.review_decision.decided_at       IS 'When the decision was made.';
+COMMENT ON COLUMN app.review_decision.recorded_at      IS 'When the decision was stored.';
+
+COMMENT ON COLUMN app.intervention.intervention_id   IS 'INT-YYYY-NNNNNN.';
+COMMENT ON COLUMN app.intervention.score_id          IS 'Approved score that justified the intervention (same employee).';
+COMMENT ON COLUMN app.intervention.review_id         IS 'Approved HR review (service checks decision, version, scope, chronology).';
+COMMENT ON COLUMN app.intervention.intervention_type IS 'checkin | workload_rebalance | career_conversation | internal_mobility.';
+COMMENT ON COLUMN app.intervention.owner_user_id     IS 'User responsible for carrying it out.';
+COMMENT ON COLUMN app.intervention.arm               IS 'treatment | control (seeded 80/20, assigned before treatment; controls are never treated).';
+COMMENT ON COLUMN app.intervention.assigned_at       IS 'When the arm was assigned.';
+COMMENT ON COLUMN app.intervention.source            IS 'simulated (generator) | app (created through the UI).';
+COMMENT ON COLUMN app.intervention.created_at        IS 'When the record was created.';
+
+COMMENT ON COLUMN app.intervention_event.event_id        IS 'IEV-YYYY-NNNNNNN.';
+COMMENT ON COLUMN app.intervention_event.intervention_id IS 'Intervention whose status changed.';
+COMMENT ON COLUMN app.intervention_event.from_status     IS 'Previous status; NULL for the first event.';
+COMMENT ON COLUMN app.intervention_event.to_status       IS 'proposed | scheduled | completed | declined | cancelled.';
+COMMENT ON COLUMN app.intervention_event.actor_user_id   IS 'User who made the change (from the session).';
+COMMENT ON COLUMN app.intervention_event.event_at        IS 'When the change happened.';
+COMMENT ON COLUMN app.intervention_event.note            IS 'Optional note.';
+
+COMMENT ON COLUMN app.exception_log.exception_id IS 'EXC-YYYY-NNNNNN.';
+COMMENT ON COLUMN app.exception_log.entity       IS 'Table, file or API action the issue concerns.';
+COMMENT ON COLUMN app.exception_log.record_id    IS 'Business ID of the affected record or request.';
+COMMENT ON COLUMN app.exception_log.issue_type   IS 'Coded issue; one of the listed values.';
+COMMENT ON COLUMN app.exception_log.detector     IS 'Rule or component that detected it (e.g. validator.survey_null_consistency, api.review_gate).';
+COMMENT ON COLUMN app.exception_log.detail       IS 'Structured detail (rule version, HTTP status, field). No restricted values.';
+COMMENT ON COLUMN app.exception_log.detected_at  IS 'When it was detected.';
+COMMENT ON COLUMN app.exception_log.status       IS 'open | acknowledged | resolved.';
+
+COMMENT ON COLUMN eval.horizon_label.as_of_date        IS 'Scoring quarter-end.';
+COMMENT ON COLUMN eval.horizon_label.horizon_end       IS 'Second quarter-end after as_of_date.';
+COMMENT ON COLUMN eval.horizon_label.ineligible_reason IS 'resignation_known | insufficient_history | not_employed; only for ineligible.';
+COMMENT ON COLUMN eval.horizon_label.target            IS '1 voluntary_exit; 0 employed_through_horizon or competing_exit; NULL otherwise.';
+COMMENT ON COLUMN eval.horizon_label.outcome_id        IS 'Terminal outcome of the same employee.';
+
+COMMENT ON COLUMN eval.potential_outcome.as_of_date     IS 'Scoring date of the intervention list.';
+COMMENT ON COLUMN eval.potential_outcome.y_if_treated   IS '1 if the person would exit voluntarily by the horizon end when treated.';
+COMMENT ON COLUMN eval.potential_outcome.y_if_untreated IS '1 if the person would exit voluntarily by the horizon end when untreated (= recorded history).';
+
+COMMENT ON COLUMN eval.ground_truth.gt_id              IS 'GT-NNNNNN.';
+COMMENT ON COLUMN eval.ground_truth.case_id            IS 'Injection case identifier (groups the rows of one injected scenario).';
+COMMENT ON COLUMN eval.ground_truth.entity             IS 'Table/file or workflow action the case targets.';
+COMMENT ON COLUMN eval.ground_truth.record_id          IS 'Business ID of the injected or control record.';
+COMMENT ON COLUMN eval.ground_truth.issue_type         IS 'FUTURE_LEAK | MISSING_AS_NEGATIVE | LABEL_DATE_MISMATCH | UNREVIEWED_SCORE (or the control''s twin type).';
+COMMENT ON COLUMN eval.ground_truth.expected_detection IS 'reject_feature | block_action | flag_label | quarantine_row | none (controls).';
+COMMENT ON COLUMN eval.ground_truth.is_control         IS 'True for clean near-valid controls that must NOT be flagged.';
+COMMENT ON COLUMN eval.ground_truth.rule_version       IS 'Version of the injection rule set.';
+
+-- Shared column meanings and view columns (inherit the base column description).
+DO $$ DECLARE r record; BEGIN
+  FOR r IN SELECT c.oid::regclass AS rel, a.attname
+           FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+           WHERE n.nspname IN ('core','app','eval') AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
+             AND col_description(c.oid, a.attnum) IS NULL AND a.attname IN ('employee_id','recorded_at')
+  LOOP
+    EXECUTE format('COMMENT ON COLUMN %s.%I IS %L', r.rel, r.attname,
+      CASE r.attname WHEN 'employee_id' THEN 'Employee (EMP-NNNNNN) this row belongs to.'
+                     ELSE 'When the row became known to the system (availability time used by as-of filters).' END);
+  END LOOP;
+  FOR r IN SELECT v.oid::regclass AS view_rel, a.attname, col_description(b.oid, ba.attnum) AS d
+           FROM (VALUES ('core.assignment_interval'::regclass, 'core.assignment'::regclass),
+                        ('core.earned_leave_ledger'::regclass, 'core.leave_ledger'::regclass)) m(vrel, brel)
+           JOIN pg_class v ON v.oid = m.vrel JOIN pg_attribute a ON a.attrelid = v.oid AND a.attnum > 0
+           JOIN pg_class b ON b.oid = m.brel
+           LEFT JOIN pg_attribute ba ON ba.attrelid = b.oid AND ba.attname = a.attname
+  LOOP
+    IF r.d IS NOT NULL THEN
+      EXECUTE format('COMMENT ON COLUMN %s.%I IS %L', r.view_rel, r.attname, r.d);
+    END IF;
+  END LOOP;
+END $$;
+COMMENT ON COLUMN core.assignment_interval.effective_to IS 'Derived exclusive end: earlier of the next assignment start and the day after termination; NULL if current.';
 
 -- =====================================================================================
 -- APPEND-ONLY ENFORCEMENT
