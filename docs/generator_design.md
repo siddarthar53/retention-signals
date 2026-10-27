@@ -1,7 +1,8 @@
-# Generator design v0.1 (for agreement before coding)
+# Generator design v0.2 (for agreement before coding)
 
-Implements `config/master_data.yaml` v0.3 (contracts C1-C5) against `db/schema.sql` v0.6.1.
-One command produces the whole dataset from one config and one seed:
+Implements `config/master_data.yaml` v0.3 (contracts C1-C5) against `db/schema.sql` v0.6.2.
+v0.2 applies ChatGPT's review of v0.1 (outcome definition, join contract, SL quantisation, in-month
+timing) and the agreed answers on treatment effect, calibration and minimum history.
 
 ```
 python -m generator.run --scale 500      # starter
@@ -10,113 +11,138 @@ python -m generator.run --scale 10000    # full
 
 ## 1. Determinism
 
-- `numpy.random.SeedSequence(seed)` is spawned into **independent named streams**: `master`,
-  `population`, `careers`, `monthly`, `hazard`, `potential_outcomes`, `injection`. Changing one
-  component does not shift the random draws of another.
-- No wall-clock time anywhere. `recorded_at` is computed from the event date plus a seeded lag
-  (e.g. workload: period end + 3-7 days; survey: submission + 0-2 days; events: same day).
-- IDs are assigned in a documented sort order (below), so the same seed gives byte-identical files.
-  Exports are written with sorted rows and fixed float formatting; SHA-256 per file goes into the
-  manifest.
+- `numpy.random.SeedSequence(seed)` spawned into independent named streams: `master`, `population`,
+  `careers`, `monthly`, `hazard`, `injection`. Changing one component does not shift another's draws.
+- No wall clock. `recorded_at` = event date + a seeded lag (rules in section 4).
+- IDs assigned in documented sort orders; exports sorted with fixed number formatting; SHA-256 per
+  file in the manifest; reproducibility = two runs with identical manifests.
+- Hazard coefficients and the calibrated intercept `b0` are **fixed in `config/generator.yaml`** with
+  their calibration provenance (development seeds, starter scale, never the test-period outcomes).
+  They are not re-solved per run, and seeds are never chosen because a run passed.
 
-## 2. How keys are guaranteed (parents first, registry-only references)
+## 2. Keys and joins
 
-The generator keeps an in-memory **registry** per table. A child row can only be created by passing
-a parent **object** taken from the registry, never a typed ID string, so a child cannot point at a
-parent that does not exist.
+### 2.1 Creation
+A child row can only be created from a parent object held in the in-memory registry (never a typed
+ID). Order: bands -> roles -> teams -> employees -> pre-window careers -> monthly history ->
+derived tables -> fixtures. IDs: see `docs/data_dictionary.md`.
 
-| Step | Creates | IDs (order of assignment) | References |
-|---|---|---|---|
-| 1 | compensation_band, role | BAND-01..06; ROLE-0001.. in family order x (IC L1-L5, Mgr L4-L6) | role -> band |
-| 2 | team | TEAM-0001.. in family order | - |
-| 3 | employee (initial) | EMP-000001.. sorted by (hire_date, team, level) | - |
-| 4 | pre-window careers | ASGN / PROMO by effective date | assignment -> employee, team, role; promotion -> its assignment |
-| 5 | monthly loop (2025-01..2026-12) | EEV, ASGN, PROMO, LVT, WLS, SURV in (date, employee) order | all -> employee; in-window hires get the next EMP ids in hire-date order |
-| 6 | derived | SNAP-<emp>-YYYYQn, OUT-<emp>-2026, labels, potential outcomes | snapshot -> its assignment (same employee); label -> outcome (same employee) |
-| 7 | anomaly fixtures + ground truth | GT-000001.. | copies of canonical rows, kept in `fixtures/`, never in canonical data |
+### 2.2 Scoring population (the ML join contract)
+For each quarter-end `as_of` in 2025Q1..2026Q4:
 
-Then three independent checks, in order:
+| Set | Definition |
+|---|---|
+| **Employed set E(as_of)** | hire_date <= as_of and no termination on or before as_of |
+| **Snapshot set** | exactly E(as_of): one `tenure_snapshot` per employed person |
+| **Label set** | exactly E(as_of): one `horizon_label` per employed person |
+| **Scoring population S(as_of)** | E(as_of) minus `ineligible` labels |
 
-1. **Load into PostgreSQL in one transaction** (COPY, parents first). Every PK, FK (including the
-   composite same-employee FKs), UNIQUE and CHECK in the schema is enforced; a single orphan,
-   duplicate or bad value rolls back the whole load.
-2. **Validator** (rules in `docs/enforcement.md`, G2 rows): chains, chronology, balances,
-   outcome/event/label reconciliation, totals, nothing after exit.
-3. **ML join tests**: the training key is `(employee_id, as_of_date)`. Feature rows, label rows and
-   snapshot rows must join 1:1 on that key: no row lost, none duplicated.
+Labels are created only for E(as_of) (people not employed at as_of get no label row; the
+`not_employed` reason is therefore unused and documented as such).
+
+`ineligible` reasons, evaluated in this order:
+1. `resignation_known`: a resignation_submitted event with event_date <= as_of and recorded_at <= as_of.
+2. `insufficient_history`: hire_date > first day of the scoring quarter. (April 1 hire is eligible on
+   June 30; April 2 is not.) Missing surveys or reporting lag never make someone ineligible.
+
+The feature table has **exactly one row per key in S(as_of)**, built with an explicit key list
+(left joins from S, never an inner join that can silently drop people). The G2 report reconciles:
+|E| = |snapshots| = |labels|; |S| = |E| - ineligible counts by reason; |features| = |S|;
+duplicates = 0; keys lost = 0. IDs are join and lineage keys only, never predictors.
+
+### 2.3 Load and validation gates
+1. One-transaction PostgreSQL COPY load: every PK / FK / composite same-employee FK / UNIQUE / CHECK.
+2. Validator (`docs/enforcement.md`, G2 rows), including outcome-event-label reconciliation.
+3. ML join contract above.
+
+**G2 report (reviewable):** per-table row counts; PK/unique duplicates = 0; FK and composite-FK
+orphans = 0; same-employee lineage mismatches = 0; invalid assignment/date relationships = 0;
+expected-vs-actual key sets per as_of; join loss/multiplication = 0; exclusions by reason; realised
+attrition (with its denominator); realised hire mix; SL paired-invariance result; two-run hashes.
 
 ## 3. Population and careers
+As v0.1 (C1-C3): exact totals, largest-remainder allocation, feasibility-capped pre-window careers,
+team created_date = min(draw, earliest member assignment).
 
-- Totals per C1/C2: initial = round(N x 0.9); teams = round(initial / 15); families, levels and
-  managers by largest-remainder allocation; one manager per team.
-- Tenure ~ gamma(mean 4y, shape 1.6), capped 1 month-18 years. Pre-window careers per C3:
-  k = sampled promotion count capped by feasibility; hired k levels below the 2025 role.
-- Team created_date = min(draw in 2012-01-01..2024-06-30, earliest member assignment).
+**Promotion clock** (used by hazard and features, never NULL in arithmetic):
+`months_since_promotion_or_hire` = months since the latest promotion, or since hire_date if never
+promoted. The stored `tenure_snapshot.months_since_promotion` stays NULL for never-promoted people;
+the derived clock is a separate, fully defined quantity.
 
-## 4. Monthly loop (causal order inside each month)
+## 4. Monthly loop with explicit dates
 
-For every employee active on the 1st or hired during the month:
+Each month m (2025-01 .. 2026-12) is processed in this order. Hires for month m are scheduled
+before the month starts (growth hires on fixed dates; backfills chosen 1-3 months earlier), so every
+hire has hire-month records.
 
-1. **Leave credits**: EL +1 on the 1st (or hire date); SL +3 on Jan 1 (or hire date).
-2. **Latent state update** (never exported): workload intensity (AR(1) around a personal level,
-   plus team shocks, benign spikes of 1-2 months, sustained-overload episodes of 4+ months),
-   engagement (drifts down with sustained overload, time since promotion, low manager support;
-   recovers after promotion or transfer), external pull (person-level), manager-relationship
-   quality (person-team level).
-3. **Career events**: promotion (hazard rises with months in role), transfer, lateral move;
-   manager exit -> vacancy -> filled by internal promotion or external hire in 1-3 months.
-4. **Leave taken**: EL blocks (more in December, before lapse; heavier while on notice), occasional
-   SL days. Capped by balance; split per calendar month; workdays only.
-5. **Workload**: scheduled_workdays from the calendar and employment days;
-   available = (scheduled - leave days) x 8; actual = round(intensity x available, 1);
-   utilisation from the stored values. After-hours and on-call depend on intensity only. Sick
-   leave therefore cannot change any model input (paired-record test at G2).
-6. **Quarter end** (Mar/Jun/Sep/Dec): survey wave sent on the 15th of the last month. Items =
-   clip(round(engagement + item noise), 1, 5). Response: 76% complete / 4% partial / 20% none;
-   non-response is more likely in high-intensity months (missing at random given workload); no
-   dependence on latent disengagement in the main dataset.
-7. **Exit hazards** (only for employees not already on notice):
-   - voluntary: logit(p_month) = b0 + b_eng x (3.6 - engagement) + b_trend x engagement decline
-     + b_sust x sustained_overload + b_promo x months_since_promotion_beyond_24
-     + b_new x (tenure < 12 months) - b_transfer x recent_transfer
-     + **latent** external_pull + **latent** manager quality + noise.
-     Benign spikes carry zero weight. b0 is calibrated once (recorded in config) so cumulative
-     voluntary exits over 24 months are ~10% of all histories; the validator requires 5-15%.
-   - involuntary: small constant monthly hazard (~2% over the window), independent of the above.
-   - A resignation creates `resignation_submitted` (notice days by level) and a later `exit`; the
-     person keeps working (and burning EL) during notice. All later rows stop at termination,
-     except the Dec 31 leave lapse (C5).
-8. **Backfill / growth hires** per C1 (target shares, real exits only, fallback to growth).
+| Step | Date(s) inside month m | Rule |
+|---|---|---|
+| 1. Leave credits | 1st (or hire date) | EL +1; SL +3 on Jan 1 (or hire date). |
+| 2. Latent state update | effective from the 1st | intensity, engagement, external pull, manager quality. This state is fixed for the whole month. |
+| 3. Career events | seeded day in month | promotion / transfer / lateral move; manager vacancy handling. |
+| 4. Leave taken | seeded workdays | EL blocks (more in December, heavier on notice), occasional SL days. Capped by balance and by `scheduled_workdays - 1`, so leave alone never zeroes a month's capacity. Split per calendar month. |
+| 5. Workload | whole month, recorded 3-7 days after month end | scheduled_workdays = workdays from max(1st, hire_date) to min(month end, termination). utilization_pct = round(intensity x 100, 1) is generated first; available = (scheduled - leave days) x 8; actual = utilization x available / 100, stored exactly. After-hours and on-call depend on intensity only. Zero capacity only when scheduled_workdays = 0. |
+| 6. Survey (quarter-end months) | sent 15th; submitted 15th-22nd; recorded 0-2 days later | Answers use the month's latent state (step 2), so nothing after submission leaks into them. Only people employed on the 15th are surveyed. |
+| 7. Exit hazards | event day drawn uniformly in the month | Use the month's latent state and the promotion clock. Resignation -> notice days by level -> termination = resignation + notice. Termination can cross months and years. The person stays employed during notice. |
+| 8. Backfill / growth scheduling | for future months | C1 targets, real exits only. |
+
+**Availability at a scoring date (as-of rule):** a row is usable at as_of only if its event date
+<= as_of **and** recorded_at <= as_of. So June workload (recorded in early July) is not available
+on June 30; June survey answers (recorded by ~June 24) are.
+
+**Voluntary hazard (monthly):**
+logit(p) = b0 + b_eng x (3.6 - engagement) + b_trend x max(0, engagement decline over 2 quarters)
++ b_sust x sustained_overload + b_promo x max(0, months_since_promotion_or_hire - 24)
++ b_new x (tenure < 12 months) - b_transfer x (transfer in last 6 months)
++ external_pull (latent) + manager_quality_effect (latent).
+Benign spikes carry zero weight. Involuntary exits use a small constant monthly hazard.
+
+**Attrition measure (one explicit definition):** voluntary terminations observed between
+2025-01-01 and 2026-12-31 / total employee histories (N). Target 10%, required 5-15%. Involuntary
+exits and resignations still on notice at 2026-12-31 are reported separately.
 
 ## 5. Derived tables
+- tenure_snapshot: one per (employee, as_of) in E(as_of), with `derived_from` lineage.
+- attrition_outcome: one per employee, from employment events.
+- horizon_label: one per (employee, as_of) in E(as_of). Target uses the voluntary **termination**
+  date: 1 if voluntary termination on or before horizon_end; 0 if employed at horizon_end (even if
+  on notice) or exited involuntarily within the horizon; `unresolved` if horizon_end > 2026-12-31.
 
-- tenure_snapshot at each quarter-end for employees active that day, with `derived_from` lineage.
-- attrition_outcome: one per employee from the employment events (active / on_notice /
-  exited_voluntary / exited_involuntary).
-- horizon_label for every employee at every quarter-end: ineligible (not employed, resignation
-  already recorded, or under one full quarter of history), voluntary_exit, employed_through_horizon,
-  competing_exit, unresolved (horizon after 2026-12-31).
-- potential_outcome for everyone active on 2026-06-30 and not on notice: every person-month from
-  July to December has one pre-drawn uniform number u. Untreated: exit if u < h (this IS the
-  recorded history). Treated: exit if u < 0.7h. Common draws make y_if_treated <= y_if_untreated.
-  The generator does not know the model. The G4/G5 pipeline creates the 80/20 intervention records
-  for the reviewed list and reads their outcomes from this table.
+## 6. Intervention outcomes (single timeline, no treated re-simulation)
 
-## 6. Anomaly injection (separate `fixtures/`, plus `ground_truth`)
+Eligible June population J = S(2026-06-30) (employed, no known resignation, sufficient history).
 
-About 1% of eligible rows per case (configurable), each with a clean near-valid control:
+- **Untreated outcome** y0 = the canonical `horizon_label.target` for (employee, 2026-06-30). This is
+  asserted equal for every employee in J.
+- **Treated outcome** y1: for each employee in J the canonical `hazard` stream draws one uniform
+  v during generation. If y0 = 1 and v < 0.30, the voluntary resignation that produced y0 is
+  **prevented** and y1 = 0; otherwise y1 = y0.
+- Therefore y1 <= y0 by definition (proved by construction, asserted in tests). The expected
+  effect is a 30% relative reduction of voluntary terminations within the horizon among treated
+  people. This is a documented synthetic assumption, not real-world causal evidence.
+- Notice delay and competing exits are preserved because y0 comes from the canonical label. If y0 = 0
+  (stayed, resigned with termination after the horizon, or competing exit) then y1 = 0: treatment
+  cannot create an exit.
+- The generator does not know the model. G4/G5 creates the 80/20 intervention records for the
+  reviewed list and reads y0/y1 from `eval.potential_outcome`.
 
-| Case | Injected | Must be caught by | Control (must NOT be flagged) |
+## 7. Anomaly injection (`fixtures/` only, with ground truth)
+
+| Case | Injected | Caught by | Clean control |
 |---|---|---|---|
-| FUTURE_LEAK | copies of workload/survey rows with event date <= as_of but recorded_at after the cutoff | feature builder (reject_feature) | recorded exactly at the cutoff |
-| MISSING_AS_NEGATIVE | no-response rows carrying an engagement score; a feature file imputing missing as 1.0 | DB load -> quarantine; feature audit | valid partial response with 3 items |
-| LABEL_DATE_MISMATCH | labels contradicting outcome dates (exit after horizon labelled 1; exit before as_of) | validator (flag_label) | termination exactly on horizon_end labelled 1 |
-| UNREVIEWED_SCORE | intervention requests: no review, dismissed review, stale score version, other team | API review gate (block_action) at G5 | approved, current, in-scope request |
+| FUTURE_LEAK | A feature snapshot for as_of that includes a legitimate source row whose recorded_at is after the cutoff (the source row itself stays valid history) | feature builder: reject the inclusion (reject_feature) | row recorded exactly at the cutoff, included |
+| MISSING_AS_NEGATIVE | no-response survey rows carrying an engagement score; a feature file imputing missing as 1.0 | DB load -> quarantine; feature audit | valid partial response with 3 items |
+| LABEL_DATE_MISMATCH | labels contradicting outcome dates (termination after horizon labelled 1; termination before as_of labelled) | validator (flag_label) | termination exactly on horizon_end labelled 1 |
+| UNREVIEWED_SCORE | intervention requests with no review, a dismissed review, a stale score version, or another team | API review gate (block_action) at G5 | approved, current, in-scope request |
 
-Detection is reported as precision/recall against ground truth, with false positives on controls.
+## 8. Boundary fixtures (tests at G2)
+Mid-month hire and exit; hire on the first day of a quarter vs the second day; resignation in
+December with termination in February (leave accrual, Jan 1 SL grant and Dec 31 lapse across the
+boundary); June workload recorded in July excluded at June 30; June survey recorded June 24
+included; leave capped so capacity never reaches zero; paired SL records with identical allowed
+features (persisted and reloaded from PostgreSQL), including low-capacity months.
 
-## 7. Outputs
-
-`data/out/<scale>/canonical/*.csv|json`, `seed.sql` (COPY format), `fixtures/`, `ground_truth.csv|json`,
-`manifest.json` (config hash, seed, row counts, SHA-256 per file), `validation_report.md`.
-Reproducibility check: run twice, compare manifests.
+## 9. Outputs
+`data/out/<scale>/canonical/*.csv|json`, `seed.sql` (COPY format), `fixtures/`,
+`ground_truth.csv|json`, `manifest.json` (config hash, seed, row counts, SHA-256 per file),
+`g2_report.md`. Nothing generated is committed (public repo).

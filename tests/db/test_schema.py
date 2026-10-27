@@ -148,6 +148,15 @@ def test_workload_utilization_arithmetic(conn):
     expect_violation(conn, workload("WLS-EMP-000001-2025-03", "2025-03-01", 21, 128, 128, 150.0),
                      "workload_utilization_arith", CHECK)
 
+def test_workload_exact_quantisation_ok(conn):
+    """util 87.3% of 136h -> actual 118.728h exactly; the check is exact, not a tolerance."""
+    expect_ok(conn, workload("WLS-EMP-000001-2025-07", "2025-07-01", 23, 136, 118.728, 87.3))
+
+def test_workload_rounded_actual_rejected(conn):
+    """The old 0.1h rounding (118.7h) no longer satisfies the exact rule."""
+    expect_violation(conn, workload("WLS-EMP-000001-2025-08", "2025-08-01", 21, 136, 118.7, 87.3),
+                     "workload_utilization_arith", CHECK)
+
 def test_workload_zero_capacity_requires_null_utilization(conn):
     err = expect_violation(conn, workload("WLS-EMP-000001-2025-05", "2025-05-01", 0, 0, 0, 0.0), None, CHECK)
     assert err.diag.constraint_name in {"workload_zero_capacity_rule", "workload_utilization_arith"}

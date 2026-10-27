@@ -1,5 +1,5 @@
 -- =====================================================================================
--- Retention Signals — database schema v0.6.1
+-- Retention Signals — database schema v0.6.2
 -- PostgreSQL 15+ (tested on 16). Load into an EMPTY database:  python scripts/db_reset.py
 --
 -- v0.6 (build start, 2026-10-27):
@@ -10,6 +10,8 @@
 --    same employee starts, or at termination, whichever is earlier. An open interval therefore ends
 --    without UPDATE; for chain-validated, chronological source data, intervals cannot overlap.
 --    core.assignment_interval is a final-history view; features reconstruct as-of in code.
+--  * v0.6.2: utilisation is generated first (0.1 steps) and actual_hours stored exactly (numeric(7,3)),
+--    so leave (incl. sick leave) cannot change utilisation through rounding (ChatGPT G2 design point 3).
 --  * v0.6.1 (ChatGPT review A1-A3): label target can no longer be NULL for completed statuses;
 --    no self-referencing / multiple hire-root assignments; column-level grants hide capacity,
 --    actual hours and raw survey items from rs_app; API uses a dedicated login role.
@@ -212,7 +214,7 @@ CREATE TABLE core.workload_snapshot (
   period_month       date NOT NULL CHECK (extract(day FROM period_month) = 1),
   scheduled_workdays smallint NOT NULL CHECK (scheduled_workdays BETWEEN 0 AND 23),
   available_hours    numeric(5,1) NOT NULL CHECK (available_hours >= 0),
-  actual_hours       numeric(5,1) NOT NULL CHECK (actual_hours BETWEEN 0 AND 400),
+  actual_hours       numeric(7,3) NOT NULL CHECK (actual_hours BETWEEN 0 AND 400),
   utilization_pct    numeric(5,1) CHECK (utilization_pct BETWEEN 0 AND 250),
   after_hours_pct    numeric(5,1) NOT NULL CHECK (after_hours_pct BETWEEN 0 AND 100),
   oncall_days        smallint NOT NULL CHECK (oncall_days BETWEEN 0 AND 31),
@@ -225,15 +227,15 @@ CREATE TABLE core.workload_snapshot (
   CONSTRAINT workload_zero_capacity_hours CHECK (available_hours <> 0 OR actual_hours = 0),
   CONSTRAINT workload_utilization_arith   CHECK (CASE WHEN utilization_pct IS NULL THEN true
                                                      WHEN available_hours = 0 THEN false
-                                                     ELSE abs(utilization_pct - round(actual_hours * 100 / available_hours, 1)) <= 0.05 END)
+                                                     ELSE utilization_pct = actual_hours * 100 / available_hours END)
 );
 COMMENT ON TABLE core.workload_snapshot IS 'Monthly workload per employee. actual_hours = intensity x available capacity, so leave lowers both hours and capacity and does not change utilisation.';
 COMMENT ON COLUMN core.workload_snapshot.workload_id        IS 'WLS-<employee-id>-YYYY-MM.';
 COMMENT ON COLUMN core.workload_snapshot.period_month       IS 'First day of the month.';
 COMMENT ON COLUMN core.workload_snapshot.scheduled_workdays IS 'Mon-Fri working days in the month while employed, minus company holidays.';
 COMMENT ON COLUMN core.workload_snapshot.available_hours    IS '(scheduled_workdays - leave days taken) x 8 hours.';
-COMMENT ON COLUMN core.workload_snapshot.actual_hours       IS 'Hours worked in the month.';
-COMMENT ON COLUMN core.workload_snapshot.utilization_pct    IS 'actual_hours / available_hours x 100, rounded to 0.1 from the stored values; NULL when available_hours = 0.';
+COMMENT ON COLUMN core.workload_snapshot.actual_hours       IS 'Hours worked in the month = utilization_pct / 100 x available_hours, stored exactly (3 decimals).';
+COMMENT ON COLUMN core.workload_snapshot.utilization_pct    IS 'Generated first in 0.1-point steps from work intensity (independent of leave); actual_hours / available_hours x 100 holds exactly. NULL when available_hours = 0.';
 COMMENT ON COLUMN core.workload_snapshot.after_hours_pct    IS 'Share of hours worked outside 09:00-18:00, percent.';
 COMMENT ON COLUMN core.workload_snapshot.oncall_days        IS 'Days on call in the month.';
 

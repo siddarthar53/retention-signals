@@ -304,8 +304,8 @@ Monthly workload per employee. actual_hours = intensity x available capacity, so
 | `period_month` | date | no | UNIQUE |  | First day of the month. |
 | `scheduled_workdays` | smallint | no |  |  | Mon-Fri working days in the month while employed, minus company holidays. |
 | `available_hours` | numeric(5,1) | no |  |  | (scheduled_workdays - leave days taken) x 8 hours. |
-| `actual_hours` | numeric(5,1) | no |  |  | Hours worked in the month. |
-| `utilization_pct` | numeric(5,1) | yes |  |  | actual_hours / available_hours x 100, rounded to 0.1 from the stored values; NULL when available_hours = 0. |
+| `actual_hours` | numeric(7,3) | no |  |  | Hours worked in the month = utilization_pct / 100 x available_hours, stored exactly (3 decimals). |
+| `utilization_pct` | numeric(5,1) | yes |  |  | Generated first in 0.1-point steps from work intensity (independent of leave); actual_hours / available_hours x 100 holds exactly. NULL when available_hours = 0. |
 | `after_hours_pct` | numeric(5,1) | no |  |  | Share of hours worked outside 09:00-18:00, percent. |
 | `oncall_days` | smallint | no |  |  | Days on call in the month. |
 | `recorded_at` | timestamp with time zone | no |  |  | When the row became known to the system (availability time used by as-of filters). |
@@ -323,7 +323,7 @@ Monthly workload per employee. actual_hours = intensity x available capacity, so
 - `workload_snapshot_period_month_check`: `CHECK ((EXTRACT(day FROM period_month) = (1)::numeric))`
 - `workload_snapshot_scheduled_workdays_check`: `CHECK (((scheduled_workdays >= 0) AND (scheduled_workdays <= 23)))`
 - `workload_snapshot_utilization_pct_check`: `CHECK (((utilization_pct >= (0)::numeric) AND (utilization_pct <= (250)::numeric)))`
-- `workload_utilization_arith`: `CHECK ( CASE     WHEN (utilization_pct IS NULL) THEN true     WHEN (available_hours = (0)::numeric) THEN false     ELSE (abs((utilization_pct - round(((actual_hours * (100)::numeric) / available_hours), 1))) <= 0.05) END)`
+- `workload_utilization_arith`: `CHECK ( CASE     WHEN (utilization_pct IS NULL) THEN true     WHEN (available_hours = (0)::numeric) THEN false     ELSE (utilization_pct = ((actual_hours * (100)::numeric) / available_hours)) END)`
 - `workload_zero_capacity_hours`: `CHECK (((available_hours <> (0)::numeric) OR (actual_hours = (0)::numeric)))`
 - `workload_zero_capacity_rule`: `CHECK (((available_hours = (0)::numeric) = (utilization_pct IS NULL)))`
 - `workload_snapshot_employee_id_period_month_key`: `UNIQUE (employee_id, period_month)`
