@@ -9,7 +9,9 @@ DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 
 def test_committed_build_matches_recorded_source():
     import json
-    assert json.loads(fp.OUT.read_text(encoding="utf-8")) == fp.current()
+    recorded = json.loads(fp.OUT.read_text(encoding="utf-8"))
+    assert recorded.pop("build")["command"]
+    assert recorded == fp.current()
 
 
 def test_bundle_contains_no_data_or_secrets():

@@ -40,8 +40,10 @@ evaluation of an already-inspected test list, not a new untouched test.
 ## C2 — one allocation rule for every approved case (review of 95842be)
 
 **Change.** Simulated reviews used a seeded random draw for the 80/20 split while the live API used a hash.
-Both now use `pipeline/allocation.py` (`arm-v1`: SHA-256 of rule version, run and employee). Because the
-simulated cases were re-allocated, the illustrative intervention comparison changed:
+Both now use `pipeline/allocation.py` (`arm-v1`: SHA-256 of rule version, run and employee). In the same change
+the simulated review loop was altered: cases are iterated in employee order (C3) and the per-case random draw
+for the arm was removed, which shifts the remaining random draws and therefore which cases stay pending or are
+dismissed. The illustrative intervention comparison changed:
 
 | | Before | After |
 |---|---:|---:|
@@ -49,8 +51,10 @@ simulated cases were re-allocated, the illustrative intervention comparison chan
 | Estimated effect (95% CI) | -7.4 pts (-17.3 to 2.4) | -12.5 pts (-23.2 to -1.8) |
 | True simulated effect | -3.5 pts | -3.2 pts |
 
-The estimate moves by 5 points from re-allocating ~60 controls, which is the point: with this few controls the
-comparison is noise-dominated and demonstrates the measurement workflow only.
+The difference reflects all three changes together (a different reviewed and approved cohort, 318 to 314,
+hence a different true effect; the new arm rule; the new iteration order). It is not an isolated allocation
+experiment. What it does show is that with ~60 controls the comparison moves by several points under small
+changes, so it demonstrates the measurement workflow only.
 
 ## C3 — case identifiers no longer encode rank
 

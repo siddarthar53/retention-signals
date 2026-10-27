@@ -46,7 +46,10 @@ Notes for Windows:
   3.0.5 is tested. Do not turn Smart App Control off to work around it.
 - The app runs on a simulated clock (`APP_NOW`, default 2026-07-15) so the 30 Jun 2026 list is the current one.
 - To change the UI: `cd frontend; npm ci; npm run dev` (port 5173, proxies `/api` to 8000), then `npm run build`
-  and `python scripts/frontend_provenance.py` (a test fails if `dist/` no longer matches its source).
+  and `python scripts/frontend_provenance.py`. The provenance file records SHA-256 hashes of the UI source,
+  lockfile, config and `dist/` together with the build command and Node/Vite versions; its check (and a test)
+  proves the committed files still match that record. It does not by itself prove `dist/` was rebuilt from that
+  source; to confirm, run `npm ci && npm run build` and the check again.
 
 ## What each role sees
 
@@ -103,8 +106,9 @@ replayed by HR). Full reports: `data/out/10000/g2_report.md`, `data/out/reports/
 - **Circularity.** The model learns the generator's own assumptions (promotion clock, engagement, workload). The results
   show the pipeline works, not that these factors drive attrition in a real company.
 - **Intervention effect.** The 80/20 comparison has 60 controls. The estimate (-12.5 points, 95% CI -23.2 to -1.8)
-  is far from the simulated truth (-3.2) and moved by 5 points when the allocation rule changed. It demonstrates
-  the measurement workflow, not causal evidence.
+  is far from the simulated truth (-3.2), and it moved by about 5 points after small changes to the simulated review
+  cohort and allocation rule (see `docs/corrections.md` C2). It demonstrates the measurement workflow, not causal
+  evidence.
 - **Single timeline.** Interventions do not re-simulate history; outcomes for treated people come from pre-computed
   potential outcomes (30% prevention assumption).
 - Logins are local demo accounts. For a hosted demo, set `SECURE_COOKIES=true` behind HTTPS.

@@ -1,4 +1,9 @@
 {
+ "build": {
+  "command": "npm ci && npm run build  (tsc -b && vite build)",
+  "node": "v22.23.4",
+  "vite": "5.4.11"
+ },
  "dist": {
   "dist/assets/index-B2eGqAPT.css": "9522046320a65cfc28938a4064b6f8992c19226872e5c8b33381e2b9a6045d1b",
   "dist/assets/index-aSKjLzS3.js": "0e0e148313e507654deffd92637c8123ac513be0265fc56f6aa089056348965d",
