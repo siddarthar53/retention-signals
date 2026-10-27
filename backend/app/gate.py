@@ -7,14 +7,13 @@ manager outside the team never learns anything about the case."""
 from __future__ import annotations
 
 import datetime as dt
-import hashlib
 import json
+
+from pipeline.allocation import assign_arm  # noqa: F401  (one shared, versioned allocation rule)
 
 from .db import next_id
 from .security import User
 
-CONTROL_SHARE = 0.20                     # agreed 80/20 treatment/control split
-ARM_SALT = "retention-signals-arm-v1"
 TERMINAL = {"completed", "declined", "cancelled"}
 TRANSITIONS = {"proposed": {"scheduled", "declined", "cancelled"},
                "scheduled": {"completed", "declined", "cancelled"}}
@@ -33,11 +32,18 @@ class Blocked(Exception):
         self.record_id, self.detail = record_id, detail or {}
 
 
+class NoActiveRun(Exception):
+    pass
+
+
 # ---------------------------------------------------------------- context
 def active_run(conn) -> str:
-    """The production run: the latest logistic-regression run. Scores from any other run are stale."""
+    """The production run: the latest logistic-regression run (ties broken by execution time, then ID).
+    Scores from any other run are stale."""
     row = conn.execute("""SELECT score_run_id FROM app.score_run WHERE scorer_type = 'logistic_regression'
-                          ORDER BY as_of_date DESC, executed_at DESC LIMIT 1""").fetchone()
+                          ORDER BY as_of_date DESC, executed_at DESC, score_run_id DESC LIMIT 1""").fetchone()
+    if row is None:
+        raise NoActiveRun()
     return row[0]
 
 
@@ -50,7 +56,16 @@ def team_of(conn, employee_id: str, at: dt.datetime) -> str | None:
 
 
 def manager_team(conn, user: User, at: dt.datetime) -> str | None:
-    return team_of(conn, user.employee_id, at) if user.role == "manager" and user.employee_id else None
+    """The team a manager user may act for RIGHT NOW: their own assignment in force at `at` must be a
+    people-manager role, and they must not have left. Checked on every read and write."""
+    if user.role != "manager" or not user.employee_id:
+        return None
+    row = conn.execute("""SELECT a.team_id, r.is_people_manager FROM core.assignment a JOIN core.role r USING (role_id)
+                          WHERE a.employee_id = %s AND a.effective_from <= %s AND a.recorded_at <= %s
+                          ORDER BY a.effective_from DESC LIMIT 1""", (user.employee_id, at.date(), at)).fetchone()
+    if row is None or not row[1] or ineligible_reason(conn, user.employee_id, at) == "employee has left":
+        return None
+    return row[0]
 
 
 def in_scope(conn, user: User, employee_id: str, at: dt.datetime) -> bool:
@@ -79,12 +94,6 @@ def current_status(conn, intervention_id: str) -> str | None:
     row = conn.execute("""SELECT to_status FROM app.intervention_event WHERE intervention_id = %s
                           ORDER BY event_at DESC, event_id DESC LIMIT 1""", (intervention_id,)).fetchone()
     return row[0] if row else None
-
-
-def assign_arm(employee_id: str, score_run_id: str) -> str:
-    """Deterministic, pre-registered randomisation: the arm depends only on the employee and run."""
-    h = hashlib.sha256(f"{ARM_SALT}:{score_run_id}:{employee_id}".encode()).digest()
-    return "control" if int.from_bytes(h[:8], "big") / 2 ** 64 < CONTROL_SHARE else "treatment"
 
 
 def _score(conn, score_id: str):
@@ -165,8 +174,9 @@ def change_status(conn, user: User, intervention_id: str, to_status: str, note: 
         raise LookupError(intervention_id)
     emp, owner, arm = row
     conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("employee:" + emp,))
-    if not (user.user_id == owner or in_scope(conn, user, emp, at)):
-        raise Blocked("NOT_AUTHORIZED", 403, "This intervention is outside your team.", intervention_id)
+    if not in_scope(conn, user, emp, at):          # ownership never overrides current scope
+        raise Blocked("NOT_AUTHORIZED", 403, "This intervention is outside your team.", intervention_id,
+                      {"employee_id": emp, "owner_user_id": owner})
     frm = current_status(conn, intervention_id)
     if arm == "control":
         raise Blocked("CONTROL_ARM_BLOCKED", 409, "Comparison-group records cannot be progressed.", intervention_id)
