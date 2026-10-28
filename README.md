@@ -17,7 +17,7 @@ performance decision. All data is synthetic: no real people, names or sensitive 
 Needs PostgreSQL 16 running locally, Python 3.12+ and Git. Node is **not** needed: the built UI is committed.
 
 ```powershell
-git clone https://github.com/srikar045p/retention-signals.git
+git clone https://github.com/siddarthar53/retention-signals.git
 cd retention-signals
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
