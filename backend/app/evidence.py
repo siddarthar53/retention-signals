@@ -107,7 +107,7 @@ def evidence(conn, score_id: str) -> dict | None:
     if len(answered) >= 2:
         answered[-2]["used_for"] += ["engagement_decline"]
     if sv:
-        sv[-1]["used_for"] += ["coverage: last_wave_no_response"]
+        sv[-1]["used_for"] += ["coverage: latest survey status"]
     if not answered:
         gaps.append("No answered survey by this date: engagement uses the neutral training reference, not a low score.")
     elif len(answered) == 1:
@@ -120,8 +120,10 @@ def evidence(conn, score_id: str) -> dict | None:
         gaps.append(f"No transfer recorded in the 182 days before {as_of}: 'transferred recently' is no.")
 
     for r in recs:
-        r["used_for_labels"] = [labels.get(f, f.replace("coverage: ", "Coverage note: ").replace("_", " "))
-                                for f in r["used_for"]]
+        uf = r["used_for"]
+        if all(m in uf for m in WORKLOAD_MEANS):          # one readable line for the three 3-month averages
+            uf = ["3-month averages (utilisation, after-hours, on-call)"] + [f for f in uf if f not in WORKLOAD_MEANS]
+        r["used_for_labels"] = [labels.get(f, f.replace("coverage: ", "Coverage note, not weighted: ")) for f in uf]
     return {"score_id": score_id, "employee_id": emp, "as_of_date": iso(as_of), "scorer_type": scorer,
             "records": recs, "gaps": gaps,
             "note": "Records as they stood on the score date. Later changes are not shown here and were not used."}
