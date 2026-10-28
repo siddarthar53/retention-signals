@@ -396,3 +396,72 @@ def test_manager_topics_are_neutral_and_in_fixed_order(step):
     listing = c["t_mgr"].get("/api/my-cases").json()
     assert "survey" not in json.dumps(listing["items"]).lower()
     assert [i["employee_id"] for i in listing["items"]] == sorted(i["employee_id"] for i in listing["items"])
+
+
+# ---------------- HR evidence (scope addendum v1, part B)
+FORBIDDEN_KEYS = {"actual_hours", "available_hours", "q1", "q2", "q3", "q4", "q5", "leave_type", "days", "target",
+                  "y_if_treated", "y_if_untreated", "min_amount", "mid_amount", "max_amount", "final_status", "arm"}
+
+
+def _keys(o, acc=None):
+    acc = set() if acc is None else acc
+    if isinstance(o, dict):
+        acc.update(o); [_keys(v, acc) for v in o.values()]
+    elif isinstance(o, list):
+        [_keys(v, acc) for v in o]
+    return acc
+
+
+def test_evidence_lists_every_source_record_with_exact_mapping(step):
+    conn, _, c, case = step
+    r = c["t_hr"].get(f"/api/cases/{case['score_id']}/evidence")
+    assert r.status_code == 200
+    ev = r.json()
+    refs = conn.execute("SELECT source_refs FROM app.score WHERE score_id = %s", (case["score_id"],)).fetchone()[0]
+    assert [x["id"] for x in ev["records"]] == [x["id"] for x in refs]
+    assert all(x["status"] == "ok" for x in ev["records"])
+    assert not _keys(ev) & FORBIDDEN_KEYS
+    wl = sorted((x for x in ev["records"] if x["table"] == "core.workload_snapshot"), key=lambda x: x["values"]["period_month"])
+    assert sum("util_mean_3m" in x["used_for"] for x in wl) == min(3, len(wl))
+    assert all("sustained_overload" in x["used_for"] for x in wl)
+    if len(wl) == 4:
+        assert wl[0]["used_for"] == ["sustained_overload"]
+    as_of = dt.date.fromisoformat(ev["as_of_date"])
+    for x in ev["records"] + [i for x in ev["records"] for i in x.get("inputs", [])]:
+        assert dt.datetime.fromisoformat(x["recorded_at"]).date() <= as_of
+
+
+def test_evidence_rejects_foreign_unlisted_and_late_rows(step):
+    """A tampered source_refs list: another employee's row, a table off the allowlist, a row recorded later."""
+    conn, _, c, case = step
+    emp = case["employee_id"]
+    with admin(conn):
+        other_wl = conn.execute("SELECT workload_id FROM core.workload_snapshot WHERE employee_id <> %s LIMIT 1",
+                                (emp,)).fetchone()[0]
+        late_wl = conn.execute("""SELECT workload_id FROM core.workload_snapshot WHERE employee_id = %s
+                                  AND period_month = '2026-06-01'""", (emp,)).fetchone()[0]   # recorded in July
+        leave = conn.execute("SELECT leave_txn_id FROM core.leave_ledger WHERE employee_id = %s LIMIT 1", (emp,)).fetchone()[0]
+        run = gate.active_run(conn)
+        r0 = conn.execute("SELECT as_of_date, model_version, config_hash, model_frozen_at, executed_at "
+                          "FROM app.score_run WHERE score_run_id = %s", (run,)).fetchone()
+        conn.execute("INSERT INTO app.score_run VALUES ('RUN-2026-0902',%s,'logistic_regression',%s,%s,%s,%s)",
+                     (r0[0], r0[1], r0[2], r0[3], r0[4] - dt.timedelta(hours=6)))
+        refs = [{"table": "core.workload_snapshot", "id": other_wl}, {"table": "core.leave_ledger", "id": leave},
+                {"table": "core.workload_snapshot", "id": late_wl}, {"table": "app.user_credential; --", "id": "x"}]
+        conn.execute("""INSERT INTO app.score SELECT 'SCR-2026-9200001','RUN-2026-0902', employee_id, risk_score, 1,
+                        priority_band, contributions, coverage, %s FROM app.score WHERE score_id = %s""",
+                     (json.dumps(refs), case["score_id"]))
+    ev = c["t_hr"].get("/api/cases/SCR-2026-9200001/evidence").json()
+    st = [x["status"] for x in ev["records"]]
+    assert st[0].startswith("rejected: record belongs to another employee")
+    assert st[1].startswith("rejected: table not on the evidence allowlist")
+    assert st[2] == "not available at the score date"
+    assert st[3].startswith("rejected")
+    assert all(x["values"] == {} for x in ev["records"])
+
+
+@pytest.mark.parametrize("who", ["t_mgr", "t_ops", "t_admin"])
+def test_evidence_is_hr_only(step, who):
+    _, _, c, case = step
+    _approve(c, case["score_id"])                 # even an approved case in the manager's own team
+    assert c[who].get(f"/api/cases/{case['score_id']}/evidence").status_code == 403

@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import db, gate, queries, security, settings
+from . import db, evidence, gate, queries, security, settings
 from .security import COOKIE, User, roles
 
 HR, MGR, OPS, ADMIN = "hr_partner", "manager", "it_ops", "admin"
@@ -144,6 +144,14 @@ def create_app(cfg: settings.Settings | None = None, *, manage_pool: bool = True
         if rev is None or rev[1] != "approved":
             raise HTTPException(404, "Case not found")     # unapproved cases do not exist for managers
         return {"view": "manager", **queries.case_for_manager(conn, score_id, at)}
+
+    @app.get("/api/cases/{score_id}/evidence", dependencies=api_deps)
+    def case_evidence(score_id: str, user: User = roles(HR), conn=Depends(db.get_conn)):
+        """HR only: every source record behind the score, as of the score date."""
+        out = evidence.evidence(conn, score_id)
+        if out is None:
+            raise HTTPException(404, "Case not found")
+        return out
 
     @app.post("/api/cases/{score_id}/review", dependencies=api_deps)
     def review(score_id: str, body: ReviewIn, user: User = roles(HR), conn=Depends(db.get_conn)):

@@ -98,7 +98,7 @@ function HrView({ c, reload }: { c: HrCase; reload: () => void }) {
               ) : <p className="quiet">No scorecard rule applies.</p>}
             </section>
           )}
-          <p className="quiet small">Built from {c.source_rows} source records, all recorded on or before {fmtDate(c.as_of_date)}.</p>
+          <Evidence scoreId={c.score_id} count={c.source_rows} asOf={c.as_of_date} />
         </div>
 
         <aside className="case-side">
@@ -122,6 +122,77 @@ function HrView({ c, reload }: { c: HrCase; reload: () => void }) {
           )}
         </aside>
       </div>
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ evidence (HR only) */
+interface EvRec { table: string; id: string; what: string; used_for_labels: string[]; values: Record<string, string | number | null>;
+  recorded_at: string | null; status: string; inputs?: EvRec[] }
+interface Ev { as_of_date: string; records: EvRec[]; gaps: string[]; note: string }
+
+const VALUE_LABEL: Record<string, string> = {
+  as_of_date: "Snapshot date", tenure_months: "Tenure (months)", months_in_role: "In role (months)",
+  months_since_promotion: "Since promotion (months)", period_month: "Month", utilization_pct: "Utilisation %",
+  after_hours_pct: "After-hours %", oncall_days: "On-call days", wave: "Wave", sent_date: "Sent",
+  response_status: "Response", engagement_index: "Engagement index", effective_from: "Effective",
+  change_reason: "Reason", effective_date: "Effective", event_type: "Event", event_date: "Date",
+};
+const fmtV = (k: string, v: string | number | null) =>
+  v == null ? "none" : typeof v === "number" ? (Number.isInteger(v) ? String(v) : v.toFixed(1))
+    : /^\d{4}-\d\d-\d\d$/.test(v) ? (k === "period_month" ? v.slice(0, 7) : fmtDate(v)) : v.replace(/_/g, " ");
+
+function Evidence({ scoreId, count, asOf }: { scoreId: string; count: number; asOf: string }) {
+  const [open, setOpen] = useState(false);
+  const { data, error } = useFetch<Ev>(open ? `/cases/${scoreId}/evidence` : null);
+  return (
+    <section className="panel">
+      <div className="evidence-head">
+        <div>
+          <h2>Evidence</h2>
+          <p className="quiet small">The {count} source records behind this score, exactly as they stood on {fmtDate(asOf)}.
+            Later changes were not used and are not shown here.</p>
+        </div>
+        <button className="secondary" onClick={() => setOpen(!open)} aria-expanded={open}>
+          {open ? "Hide records" : "Show records"}</button>
+      </div>
+      {open && error && <Problem error={error} />}
+      {open && !data && !error && <Loading what="the evidence" />}
+      {open && data && (
+        <>
+          {data.gaps.length > 0 && (
+            <ul className="gaps">{data.gaps.map((g) => <li key={g}>{g}</li>)}</ul>
+          )}
+          <div className="table-wrap">
+            <table className="evidence">
+              <thead><tr><th>Record</th><th>Values the model could see</th><th>Recorded</th><th>Used for</th></tr></thead>
+              <tbody>
+                {data.records.map((r) => (
+                  <EvRow key={r.id} r={r} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function EvRow({ r, nested = false }: { r: EvRec; nested?: boolean }) {
+  return (
+    <>
+      <tr className={nested ? "nested" : ""}>
+        <td><strong>{r.what}</strong><div className="quiet small mono-ish">{r.id}</div>
+          {r.status !== "ok" && <Pill tone="stop">{r.status}</Pill>}</td>
+        <td><dl className="kv">{Object.entries(r.values).map(([k, v]) => (
+          <div key={k}><dt>{VALUE_LABEL[k] ?? k}</dt><dd>{fmtV(k, v)}</dd></div>))}</dl></td>
+        <td className="num small">{r.recorded_at ? new Date(r.recorded_at).toISOString().replace("T", " ").slice(0, 16) + " UTC" : ""}</td>
+        <td className="small">{nested ? <span className="quiet">Input to the tenure snapshot</span>
+          : r.used_for_labels.length ? <ul className="plain">{r.used_for_labels.map((u) => <li key={u}>{u}</li>)}</ul>
+          : <span className="quiet">Not used</span>}</td>
+      </tr>
+      {r.inputs?.map((i) => <EvRow key={i.id} r={i} nested />)}
     </>
   );
 }

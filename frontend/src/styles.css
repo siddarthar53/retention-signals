@@ -276,3 +276,15 @@ th.num { text-align: right; }
   .login-form { border-left: 0; border-top: 1px solid var(--line); }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* ---------- evidence */
+.evidence-head { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; }
+.evidence-head h2 { margin-bottom: 0.25rem; }
+.gaps { margin: 1rem 0 0.5rem; padding: 0.75rem 1rem 0.75rem 2rem; background: var(--watch-bg); border-radius: 6px; font-size: 0.9375rem; }
+.evidence { margin-top: 0.75rem; }
+.evidence tr.nested td { background: var(--sunk); font-size: 0.875rem; }
+.evidence tr.nested td:first-child { padding-left: 1rem; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 0.1rem 0.75rem; margin: 0; font-size: 0.875rem; }
+.kv div { display: contents; }
+.kv dt { color: var(--ink-3); }
+.kv dd { margin: 0; }
