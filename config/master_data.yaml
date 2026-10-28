@@ -116,7 +116,7 @@ calendar:
   company_holidays_per_year:  # fixed synthetic list (same month-day each year)
     ["01-01", "01-26", "03-14", "05-01", "08-15", "10-02", "10-20", "11-08", "12-25", "12-31"]
 
-leave_policy:                 # confirmed by Srikar
+leave_policy:                 # confirmed by Siddarth
   earned_leave: {accrual_per_employed_month: 1}
   sick_leave: {grant_days: 3, granted_on: "Jan 1, or hire date for in-year joiners"}
   year_end: "all unused EL and SL lapse on Dec 31; nothing carries over"
