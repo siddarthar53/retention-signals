@@ -1,6 +1,6 @@
 // One vocabulary for the whole interface: the same action keeps the same name everywhere.
 export const ROLE: Record<string, string> = {
-  hr_partner: "HR partner", manager: "Manager", it_ops: "IT operations", admin: "Administrator",
+  hr_partner: "HR partner", manager: "Manager", it_ops: "IT operations", admin: "Administrator", employee: "Employee",
 };
 export const BAND: Record<string, string> = {
   suggested_checkin: "Suggested check-in", monitor: "Keep an eye on", none: "No action",

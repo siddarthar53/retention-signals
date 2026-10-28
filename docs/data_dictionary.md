@@ -360,22 +360,23 @@ EL rows only. The app role reads this view; it has no access to SL rows.
 
 ## `app.app_user`
 
-People who use the app. Employees are data subjects, not users. A manager's scope is the team of their current assignment.
+People who use the app. A manager's scope is the team of their current assignment. An employee account sees only its own permitted records (My data page), never scores, reviews or interventions.
 
 | Column | Type | Null | Keys | Default | Description |
 |---|---|---|---|---|---|
 | `user_id` | text | no | PK |  | USR-NNNN. |
 | `username` | text | no | UNIQUE |  | Login name, unique. |
 | `display_name` | text | no |  |  | Name shown in the UI (persona, e.g. "HR Partner 01"). |
-| `app_role` | text | no |  |  | manager \| hr_partner \| it_ops \| admin. |
-| `employee_id` | text | yes | FK core.employee(employee_id) |  | Employee record of a manager user (required for managers; scope = team of their current assignment). |
+| `app_role` | text | no |  |  | manager \| hr_partner \| it_ops \| admin \| employee. |
+| `employee_id` | text | yes | FK core.employee(employee_id) |  | Linked employee record; required for managers (scope = team of their current assignment) and employees (scope = their own records only; one account per employee). |
 | `is_active` | boolean | no |  | true | Inactive users cannot log in. |
 
 **Constraints**
 
-- `app_user_app_role_check`: `CHECK ((app_role = ANY (ARRAY['manager'::text, 'hr_partner'::text, 'it_ops'::text, 'admin'::text])))`
-- `manager_has_employee`: `CHECK (((app_role <> 'manager'::text) OR (employee_id IS NOT NULL)))`
+- `account_has_employee`: `CHECK (((app_role <> ALL (ARRAY['manager'::text, 'employee'::text])) OR (employee_id IS NOT NULL)))`
+- `app_user_app_role_check`: `CHECK ((app_role = ANY (ARRAY['manager'::text, 'hr_partner'::text, 'it_ops'::text, 'admin'::text, 'employee'::text])))`
 - `user_id_format`: `CHECK ((user_id ~ '^USR-\d{4}$'::text))`
+- `app_user_one_employee_account`: `btree (employee_id) WHERE (app_role = 'employee'::text)` (unique index)
 
 ## `app.exception_log`
 

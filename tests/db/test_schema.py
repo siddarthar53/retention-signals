@@ -334,7 +334,7 @@ def test_credential_requires_argon2_hash(conn):
 
 def test_manager_user_needs_employee(conn):
     expect_violation(conn, "INSERT INTO app.app_user VALUES ('USR-0002','mgr1','Manager 01','manager',NULL,true)",
-                     "manager_has_employee", CHECK)
+                     "account_has_employee", CHECK)
 
 def test_intervention_score_of_other_employee(conn):
     conn.execute("INSERT INTO app.app_user VALUES ('USR-0001','hr1','HR Partner 01','hr_partner',NULL,true)")

@@ -347,12 +347,13 @@ CREATE TABLE app.app_user (
   user_id      text PRIMARY KEY CONSTRAINT user_id_format CHECK (user_id ~ '^USR-\d{4}$'),
   username     text NOT NULL UNIQUE,
   display_name text NOT NULL,
-  app_role     text NOT NULL CHECK (app_role IN ('manager','hr_partner','it_ops','admin')),
+  app_role     text NOT NULL CHECK (app_role IN ('manager','hr_partner','it_ops','admin','employee')),
   employee_id  text REFERENCES core.employee(employee_id),
   is_active    boolean NOT NULL DEFAULT true,
-  CONSTRAINT manager_has_employee CHECK (app_role <> 'manager' OR employee_id IS NOT NULL)
+  CONSTRAINT account_has_employee CHECK (app_role NOT IN ('manager','employee') OR employee_id IS NOT NULL)
 );
-COMMENT ON TABLE app.app_user IS 'People who use the app. Employees are data subjects, not users. A manager''s scope is the team of their current assignment.';
+CREATE UNIQUE INDEX app_user_one_employee_account ON app.app_user (employee_id) WHERE app_role = 'employee';
+COMMENT ON TABLE app.app_user IS 'People who use the app. A manager''s scope is the team of their current assignment. An employee account sees only its own permitted records (My data page), never scores, reviews or interventions.';
 
 CREATE TABLE app.user_credential (
   user_id       text PRIMARY KEY REFERENCES app.app_user(user_id),
@@ -523,8 +524,8 @@ COMMENT ON COLUMN core.assignment.role_id                 IS 'Role for this inte
 COMMENT ON COLUMN app.app_user.user_id      IS 'USR-NNNN.';
 COMMENT ON COLUMN app.app_user.username     IS 'Login name, unique.';
 COMMENT ON COLUMN app.app_user.display_name IS 'Name shown in the UI (persona, e.g. "HR Partner 01").';
-COMMENT ON COLUMN app.app_user.app_role     IS 'manager | hr_partner | it_ops | admin.';
-COMMENT ON COLUMN app.app_user.employee_id  IS 'Employee record of a manager user (required for managers; scope = team of their current assignment).';
+COMMENT ON COLUMN app.app_user.app_role     IS 'manager | hr_partner | it_ops | admin | employee.';
+COMMENT ON COLUMN app.app_user.employee_id  IS 'Linked employee record; required for managers (scope = team of their current assignment) and employees (scope = their own records only; one account per employee).';
 COMMENT ON COLUMN app.app_user.is_active    IS 'Inactive users cannot log in.';
 
 COMMENT ON COLUMN app.user_credential.user_id       IS 'User the credential belongs to.';

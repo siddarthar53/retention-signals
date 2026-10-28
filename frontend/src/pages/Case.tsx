@@ -187,7 +187,7 @@ function EvRow({ r, nested = false }: { r: EvRec; nested?: boolean }) {
           {r.status !== "ok" && <Pill tone="stop">{r.status}</Pill>}</td>
         <td><dl className="kv">{Object.entries(r.values).map(([k, v]) => (
           <div key={k}><dt>{VALUE_LABEL[k] ?? k}</dt><dd>{fmtV(k, v)}</dd></div>))}</dl></td>
-        <td className="num small">{r.recorded_at ? new Date(r.recorded_at).toISOString().replace("T", " ").slice(0, 16) + " UTC" : ""}</td>
+        <td className="small when">{r.recorded_at ? <>{fmtDate(r.recorded_at)}<div className="quiet">{new Date(r.recorded_at).toISOString().slice(11, 16)} UTC</div></> : ""}</td>
         <td className="small">{nested ? <span className="quiet">Input to the tenure snapshot</span>
           : r.used_for_labels.length ? <ul className="plain">{r.used_for_labels.map((u) => <li key={u}>{u}</li>)}</ul>
           : <span className="quiet">Not used</span>}</td>

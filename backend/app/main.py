@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from . import db, evidence, gate, queries, security, settings
 from .security import COOKIE, User, roles
 
-HR, MGR, OPS, ADMIN = "hr_partner", "manager", "it_ops", "admin"
+HR, MGR, OPS, ADMIN, EMP = "hr_partner", "manager", "it_ops", "admin", "employee"
 
 
 class LoginIn(BaseModel):
@@ -112,8 +112,16 @@ def create_app(cfg: settings.Settings | None = None, *, manage_pool: bool = True
         return {"ok": True}
 
     @app.get("/api/auth/me", dependencies=api_deps)
-    def me(user: User = roles(HR, MGR, OPS, ADMIN)):
+    def me(user: User = roles(HR, MGR, OPS, ADMIN, EMP)):
         return {"user": user.__dict__, "now": db.now().isoformat()}
+
+    # ------------------------------------------------------------ employee: own records only
+    @app.get("/api/my-data", dependencies=api_deps)
+    def my_data(user: User = roles(EMP), conn=Depends(db.get_conn)):
+        try:
+            return queries.my_data(conn, user, db.now())
+        except queries.NotEmployed:
+            raise HTTPException(403, "This account is not linked to a current employee record.")
 
     # ------------------------------------------------------------ HR
     @app.get("/api/overview", dependencies=api_deps)

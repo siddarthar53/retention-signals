@@ -111,6 +111,24 @@ def seed_users(conn, run_id: str) -> list[tuple[str, str, str]]:
               ("itops1", "IT Operations 01", "it_ops", None), ("admin1", "Administrator 01", "admin", None)]
     for i, (team_id, emp, _) in enumerate(teams, 1):
         people.append((f"manager{i}", f"Manager of {team_id}", "manager", emp))
+    # Employee accounts (My data page): three members of each of the first two demo managers' teams,
+    # still employed with no resignation known on the app's business date.
+    members = conn.execute("""
+        WITH cur AS (
+          SELECT DISTINCT ON (a.employee_id) a.employee_id, a.team_id, r.is_people_manager
+          FROM core.assignment a JOIN core.role r USING (role_id)
+          WHERE a.effective_from <= %(d)s AND a.recorded_at <= %(t)s ORDER BY a.employee_id, a.effective_from DESC)
+        SELECT cur.employee_id, cur.team_id FROM cur
+        WHERE cur.team_id = ANY(%(teams)s) AND NOT cur.is_people_manager
+          AND NOT EXISTS (SELECT 1 FROM core.employment_event e WHERE e.employee_id = cur.employee_id
+                          AND e.event_type IN ('exit','resignation_submitted') AND e.event_date <= %(d)s AND e.recorded_at <= %(t)s)
+        ORDER BY array_position(%(teams)s, cur.team_id), cur.employee_id""",
+                           {"d": APP_DATE, "t": APP_TIME, "teams": [t for t, _, _ in teams[:2]]}).fetchall()
+    chosen = []
+    for team_id, _, _ in teams[:2]:
+        chosen += [e for e, t in members if t == team_id][:3]
+    for i, emp in enumerate(chosen, 1):
+        people.append((f"employee{i}", f"Employee {emp}", "employee", emp))
     creds = []
     for i, (username, name, role, emp) in enumerate(people, 1):
         uid = f"USR-{i:04d}"
@@ -120,6 +138,8 @@ def seed_users(conn, run_id: str) -> list[tuple[str, str, str]]:
         creds.append((username, role, pw))
     return creds
 
+
+APP_DATE, APP_TIME = "2026-07-15", "2026-07-15 10:00:00+00"     # the app's default business clock (APP_NOW)
 
 INTERVENTION_FOR = {"engagement_latest": "checkin", "engagement_decline": "checkin",
                     "util_mean_3m": "workload_rebalance", "sustained_overload": "workload_rebalance",

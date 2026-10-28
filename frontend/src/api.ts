@@ -1,5 +1,5 @@
 // Thin fetch wrapper. Cookies carry the session; every write sends the CSRF header the API requires.
-export type Role = "hr_partner" | "manager" | "it_ops" | "admin";
+export type Role = "hr_partner" | "manager" | "it_ops" | "admin" | "employee";
 export interface User { user_id: string; username: string; display_name: string; role: Role; employee_id: string | null }
 
 export class ApiError extends Error {

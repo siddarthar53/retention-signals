@@ -39,7 +39,7 @@ export default function Admin() {
       {user.role === "admin" && (
         <section className="panel">
           <h2>Users</h2>
-          <p className="quiet">Employees are the subject of the data and do not sign in. Managers see only HR-approved cases in their own team.</p>
+          <p className="quiet">Employee accounts see only their own records, never scores or reviews. Managers see only HR-approved cases in their own team.</p>
           {users.error && <Problem error={users.error} />}
           {users.data && (
             <div className="table-wrap">

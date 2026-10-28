@@ -11,6 +11,7 @@ import Interventions from "./pages/Interventions";
 import Quality from "./pages/Quality";
 import Evaluation from "./pages/Evaluation";
 import Admin from "./pages/Admin";
+import MyData from "./pages/MyData";
 
 interface Session { user: User; now: string; signOut: () => Promise<void> }
 const SessionCtx = createContext<Session | null>(null);
@@ -28,8 +29,9 @@ const NAV: Record<Role, { to: string; text: string }[]> = {
     { to: "/overview", text: "Overview" }, { to: "/admin", text: "Users and runs" },
     { to: "/quality", text: "Data quality" }, { to: "/evaluation", text: "Model evaluation" },
   ],
+  employee: [{ to: "/me", text: "My data" }],
 };
-const HOME: Record<Role, string> = { hr_partner: "/queue", manager: "/my-team", it_ops: "/quality", admin: "/overview" };
+const HOME: Record<Role, string> = { hr_partner: "/queue", manager: "/my-team", it_ops: "/quality", admin: "/overview", employee: "/me" };
 
 export default function App() {
   const [session, setSession] = useState<{ user: User; now: string } | null | undefined>(undefined);
@@ -88,6 +90,7 @@ export default function App() {
             <Route path="/quality" element={allowed(["hr_partner", "it_ops", "admin"], <Quality />)} />
             <Route path="/evaluation" element={allowed(["hr_partner", "it_ops", "admin"], <Evaluation />)} />
             <Route path="/admin" element={allowed(["it_ops", "admin"], <Admin />)} />
+            <Route path="/me" element={allowed(["employee"], <MyData />)} />
             <Route path="*" element={<Navigate to={HOME[user.role]} replace />} />
           </Routes>
         </main>

@@ -64,8 +64,13 @@ def env():
     assert vac, "required vacancy-team fixture case not found"
     case["vac"] = vac
     h = PasswordHasher().hash(PW)
+    from backend.app.queries import _current_rows
+    mates = [r[0] for r in _current_rows(conn, case["team"], at) if not r[2] and no_exit(r[0])]
+    assert len(mates) >= 2, "need two current team members for employee-account tests"
+    case["emp1"], case["emp2"] = mates[0], mates[1]
     people = [("t_hr", "hr_partner", None), ("t_mgr", "manager", case["mgr"]), ("t_other", "manager", case["other"]),
-              ("t_ops", "it_ops", None), ("t_admin", "admin", None)]
+              ("t_ops", "it_ops", None), ("t_admin", "admin", None),
+              ("t_emp", "employee", case["emp1"]), ("t_emp2", "employee", case["emp2"])]
     for i, (u, role, emp) in enumerate(people):
         conn.execute("INSERT INTO app.app_user VALUES (%s,%s,%s,%s,%s,true)", (f"USR-{8000 + i}", u, u, role, emp))
         conn.execute("INSERT INTO app.user_credential VALUES (%s,%s,%s)", (f"USR-{8000 + i}", h, at))
@@ -465,3 +470,101 @@ def test_evidence_is_hr_only(step, who):
     _, _, c, case = step
     _approve(c, case["score_id"])                 # even an approved case in the manager's own team
     assert c[who].get(f"/api/cases/{case['score_id']}/evidence").status_code == 403
+
+
+# ---------------- employee "My data" (scope addendum v1, part A)
+SCORE_KEYS = {"risk_score", "rank", "band", "priority_band", "contributions", "coverage", "source_refs", "score_id",
+              "reviews", "review", "decision", "interventions", "intervention", "arm", "themes", "scorecard",
+              "engagement_index", "q1", "leave_type", "sick", "actual_hours", "available_hours"}
+
+
+def test_employee_sees_only_own_records(step):
+    _, _, c, case = step
+    a, b = c["t_emp"].get("/api/my-data"), c["t_emp2"].get("/api/my-data")
+    assert a.status_code == b.status_code == 200
+    assert a.json()["employee_id"] == case["emp1"] and b.json()["employee_id"] == case["emp2"]
+    assert not _keys(a.json()) & SCORE_KEYS
+    for m in a.json()["team_members"]:
+        assert set(m) == {"employee_id", "role_title"}
+    assert case["emp1"] not in [m["employee_id"] for m in a.json()["team_members"]]
+
+
+@pytest.mark.parametrize("override", ["?employee_id={other}", "?emp={other}&user_id=USR-8000"])
+def test_employee_cannot_name_another_employee(step, override):
+    _, _, c, case = step
+    r = c["t_emp"].get("/api/my-data" + override.format(other=case["emp2"]),
+                       headers={"X-Employee-Id": case["emp2"]})
+    assert r.status_code == 200 and r.json()["employee_id"] == case["emp1"]
+
+
+def test_employee_is_denied_everything_else(step):
+    _, _, c, case = step
+    e = c["t_emp"]
+    reads = ["/api/overview", "/api/queue", f"/api/cases/{case['score_id']}", f"/api/cases/{case['score_id']}/evidence",
+             "/api/my-cases", "/api/interventions", "/api/exceptions", "/api/data-quality", "/api/evaluation",
+             "/api/runs", "/api/users"]
+    for path in reads:
+        assert e.get(path).status_code == 403, path
+    writes = [(f"/api/cases/{case['score_id']}/review", {"decision": "approved", "reason_code": "supportive_checkin"}),
+              ("/api/interventions", {"score_id": case["score_id"], "intervention_type": "checkin"}),
+              ("/api/interventions/INT-2026-000001/status", {"to_status": "scheduled"})]
+    for path, body in writes:
+        assert e.post(path, json=body, headers=H).status_code == 403, path
+    assert c["t_mgr"].get("/api/my-data").status_code == 403          # managers do not get the employee page
+    assert c["t_hr"].get("/api/my-data").status_code == 403
+
+
+def test_my_data_excludes_rows_not_yet_known_at_business_time(step):
+    conn, _, c, case = step
+    emp = case["emp1"]
+    now = db.now()
+    before = c["t_emp"].get("/api/my-data").json()
+    with admin(conn):
+        # an accrual dated today but recorded tomorrow (the simulation also holds this person's later months,
+        # e.g. July 2026 workload recorded in August, which must already be invisible)
+        conn.execute("INSERT INTO core.leave_ledger VALUES ('LVT-2026-9999991',%s,'EL','accrual',1,%s,%s,%s)",
+                     (emp, now.date(), now.year, now + dt.timedelta(days=1)))
+        future_wl = conn.execute("SELECT count(*) FROM core.workload_snapshot WHERE employee_id = %s AND recorded_at > %s",
+                                 (emp, now)).fetchone()[0]
+        future_el = conn.execute("""SELECT count(*) FROM core.leave_ledger WHERE employee_id = %s AND leave_type = 'EL'
+                                    AND leave_year = %s AND (txn_date > %s OR recorded_at > %s)""",
+                                 (emp, now.year, now.date(), now)).fetchone()[0]
+    assert future_wl > 0 and future_el > 1          # there really are not-yet-known rows to exclude
+    after = c["t_emp"].get("/api/my-data").json()
+    assert after["earned_leave"] == before["earned_leave"]
+    assert after["workload"] == before["workload"]
+    assert all(w["month"] <= now.date().isoformat()[:7] for w in after["workload"])
+    expected = conn.execute("""SELECT coalesce(sum(days),0) FROM core.earned_leave_ledger WHERE employee_id = %s
+                               AND leave_year = %s AND txn_date <= %s AND recorded_at <= %s""",
+                            (emp, now.year, now.date(), now)).fetchone()[0]
+    assert after["earned_leave"]["balance"] == expected
+
+
+def test_my_data_fails_closed_after_exit(step):
+    conn, _, c, case = step
+    with admin(conn):
+        at = db.now()
+        conn.execute("INSERT INTO core.employment_event VALUES (%s,%s,'exit',%s,'voluntary',NULL,%s)",
+                     (f"EEV-2026-{980000 + int(case['emp1'][-4:]):06d}", case["emp1"], at.date() - dt.timedelta(days=1),
+                      at - dt.timedelta(hours=1)))
+    assert c["t_emp"].get("/api/my-data").status_code == 403
+
+
+def test_employee_account_rules_in_the_database(step):
+    conn = step[0]
+    with admin(conn):
+        with pytest.raises(psycopg.errors.CheckViolation):
+            with conn.transaction():
+                conn.execute("INSERT INTO app.app_user VALUES ('USR-8100','x_emp','x','employee',NULL,true)")
+        with pytest.raises(psycopg.errors.UniqueViolation):
+            with conn.transaction():
+                conn.execute("INSERT INTO app.app_user VALUES ('USR-8101','x_emp2','x','employee',%s,true)",
+                             (step[3]["emp1"],))
+
+
+def test_inactive_employee_account_cannot_sign_in(step):
+    conn, app, _, _ = step
+    with admin(conn):
+        conn.execute("UPDATE app.app_user SET is_active = false WHERE username = 't_emp2'")
+    assert TestClient(app).post("/api/auth/login", json={"username": "t_emp2", "password": PW},
+                                headers=H).status_code == 401

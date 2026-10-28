@@ -317,3 +317,87 @@ def users(conn, at: dt.datetime) -> list[dict]:
 
 def read_json(path: Path) -> dict | None:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+
+# ---------------------------------------------------------------- employee "My data" (scope addendum v1, part A)
+DATA_NOTICE = ("Your records here are used, together with everyone else's, to suggest when a manager might offer a "
+               "supportive check-in. HR reviews every suggestion. They are never used for performance, pay or "
+               "employment decisions. Sick leave and individual survey answers are never shown to managers. "
+               "If something here looks wrong, contact your HR partner. All people and data in this demo are synthetic.")
+
+
+class NotEmployed(Exception):
+    pass
+
+
+def _current_rows(conn, team_id: str, at: dt.datetime) -> list[tuple]:
+    """People whose assignment in force at `at` (recorded by then) is in team_id and who have not left."""
+    return conn.execute("""
+        WITH cur AS (
+          SELECT DISTINCT ON (a.employee_id) a.employee_id, a.team_id, a.role_id
+          FROM core.assignment a WHERE a.effective_from <= %(d)s AND a.recorded_at <= %(t)s
+          ORDER BY a.employee_id, a.effective_from DESC)
+        SELECT cur.employee_id, r.role_title, r.is_people_manager FROM cur JOIN core.role r USING (role_id)
+        WHERE cur.team_id = %(team)s
+          AND NOT EXISTS (SELECT 1 FROM core.employment_event e WHERE e.employee_id = cur.employee_id
+                          AND e.event_type = 'exit' AND e.event_date <= %(d)s AND e.recorded_at <= %(t)s)
+        ORDER BY cur.employee_id""", {"d": at.date(), "t": at, "team": team_id}).fetchall()
+
+
+def my_data(conn, user: User, at: dt.datetime) -> dict:
+    """Only the signed-in employee's own permitted records, as of the business clock. Identity comes from
+    the session; nothing in the request can name another employee."""
+    emp = user.employee_id
+    if user.role != "employee" or not emp:
+        raise NotEmployed()
+    if gate.ineligible_reason(conn, emp, at) == "employee has left":
+        raise NotEmployed()
+    today = at.date()
+    ctx = employee_context(conn, emp, at)
+    if not ctx:
+        raise NotEmployed()
+    hire = dt.date.fromisoformat(ctx["hire_date"])
+    own = conn.execute("""SELECT effective_from, role_id, team_id FROM core.assignment
+                          WHERE employee_id = %s AND effective_from <= %s AND recorded_at <= %s
+                          ORDER BY effective_from DESC""", (emp, today, at)).fetchall()
+    role_start = own[0][0]
+    for eff, role_id, _ in own[1:]:
+        if role_id != own[0][1]:
+            break
+        role_start = eff
+    last_promo = conn.execute("""SELECT max(effective_date) FROM core.promotion_history
+                                 WHERE employee_id = %s AND effective_date <= %s AND recorded_at <= %s""",
+                              (emp, today, at)).fetchone()[0]
+    team = _current_rows(conn, own[0][2], at)
+    managers = [r for r in team if r[2] and r[0] != emp]
+    if ctx["is_people_manager"]:
+        manager = {"status": "self", "text": "You lead this team."}
+    elif managers:
+        manager = {"status": "assigned", "employee_id": managers[0][0], "role_title": managers[0][1]}
+    else:
+        manager = {"status": "vacant", "text": "No manager is assigned to this team right now. Your HR partner is your contact."}
+    members = [{"employee_id": r[0], "role_title": r[1]} for r in team if r[0] != emp]
+    workload = [{"month": iso(w[0])[:7], "utilization_pct": num(w[1], 1), "after_hours_pct": num(w[2], 1),
+                 "oncall_days": w[3]}
+                for w in conn.execute("""SELECT period_month, utilization_pct, after_hours_pct, oncall_days
+                                         FROM core.workload_snapshot WHERE employee_id = %s
+                                         AND period_month <= %s AND recorded_at <= %s
+                                         ORDER BY period_month DESC LIMIT 12""", (emp, today, at))][::-1]
+    el = conn.execute("""SELECT coalesce(sum(days), 0),
+                                coalesce(sum(days) FILTER (WHERE txn_type = 'accrual'), 0),
+                                coalesce(-sum(days) FILTER (WHERE txn_type = 'taken'), 0)
+                         FROM core.earned_leave_ledger WHERE employee_id = %s AND leave_year = %s
+                           AND txn_date <= %s AND recorded_at <= %s""", (emp, today.year, today, at)).fetchone()
+    months = lambda d: round((today - d).days / 30.4375, 1)
+    return {
+        "employee_id": emp, "as_of": iso(today),
+        "job": {"role_title": ctx["role_title"], "job_family": ctx["job_family"], "level": ctx["level"],
+                "team_name": ctx["team_name"], "hire_date": ctx["hire_date"], "months_with_company": months(hire),
+                "role_since": iso(role_start), "months_in_role": months(role_start),
+                "last_promotion": iso(last_promo) if last_promo else None},
+        "manager": manager, "team_members": members, "workload": workload,
+        "earned_leave": {"year": today.year, "balance": int(el[0]), "accrued": int(el[1]), "taken": int(el[2]),
+                         "as_of": iso(today),
+                         "note": "Earned leave accrues 1 day a month; unused days lapse on 31 December."},
+        "notice": DATA_NOTICE,
+    }

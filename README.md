@@ -8,9 +8,9 @@ performance decision. All data is synthetic: no real people, names or sensitive 
 |---|---|
 | Data | 10 entities, 10,000 employees, 24 months (2025-2026), voluntary attrition 10.3% (required 5-15%) |
 | Edge cases | 4 planted issue types with look-alike controls and ground truth: future leakage, missing survey treated as low, label/date mismatch, action without HR approval |
-| Checks | 30 semantic validator rules, all 31 foreign keys, byte-identical reruns (SHA-256 manifest), 163 tests |
+| Checks | 30 semantic validator rules, all 31 foreign keys, byte-identical reruns (SHA-256 manifest), 176 tests |
 | Model | Logistic regression + points scorecard, temporal split (train 2025 Q1-Q2, validate Q3, test 2026-06-30 once) |
-| App | FastAPI + PostgreSQL + React. HR reviews every suggestion before a manager sees it; managers never see scores |
+| App | FastAPI + PostgreSQL + React. HR reviews every suggestion before a manager sees it; managers never see scores; employees see only their own records |
 
 ## Run it on Windows (about 5 minutes)
 
@@ -37,7 +37,7 @@ python -m uvicorn backend.app.main:app --port 8000
 ```
 
 Open <http://127.0.0.1:8000>. Logins are in `data\out\demo_credentials.txt` (local only, never committed):
-`hr1`/`hr2` (HR partner), `manager1`..`manager6`, `itops1`, `admin1`.
+`hr1`/`hr2` (HR partner), `manager1`..`manager6`, `itops1`, `admin1`, `employee1`..`employee6`.
 
 Notes for Windows:
 
@@ -59,8 +59,18 @@ Notes for Windows:
 | Manager | Approved cases in their own team only: themes, conversation guide, progress | Scores, ranks, model numbers, other teams, unapproved cases |
 | IT operations | Data quality, evaluation, scoring runs | Individual cases |
 | Administrator | Overview, users, runs, data quality, evaluation | Individual cases |
+| Employee | My data: own role, team, manager, tenure, last 12 months of workload, earned-leave balance; teammates as ID + role title | Any score, list membership, review, conversation or comparison group; sick leave; survey answers; anyone else's records |
 
-Employees are the subject of the data and do not sign in.
+**Evidence (HR only).** A case's Evidence panel lists every source record behind the score: the values the model
+could see, the exact time each was recorded, and which signal it fed (for example, the oldest of four workload months
+feeds only "sustained overload"). Records are looked up through a fixed allowlist, must belong to the same employee and
+must have been available on the score date; anything else is flagged and its values withheld. Managers do not see
+evidence or model numbers.
+
+**Employee accounts** are read-only and scoped by the session alone; nothing in a request can name another
+employee. All records are shown as of the business date (later rows are excluded), and an account fails closed if the
+person has left. Telling someone they are on the suggested list would turn a supportive prompt into a label, so it is
+never shown to them.
 
 **The approval rule.** Starting a conversation is checked in this order, in one transaction: requester's team scope (403),
 current score version (409), latest HR decision is "approved" (409), person still eligible (409), no existing or
